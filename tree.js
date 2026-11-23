@@ -288,15 +288,24 @@ void main() {
     float h1=fract(sin(aPhase*12.9898)*43758.5453);
     float h2=fract(sin(aPhase*78.233)*24634.6345);
     float h3=fract(sin(aPhase*45.164)*12543.123);
-    // Falling curtain: staggered delays + gravity acceleration. Particles land
-    // in a loose cloud roughly where the heart will be, with the floor mist as
-    // a faint accumulation at the very bottom.
-    float delay=h1*0.40;
+    float h4=fract(sin(aPhase*34.771)*6217.317);
+    float h5=fract(sin(aPhase*57.913)*3719.541);
+    // Falling rain: every particle owns an independent (x, start height,
+    // landing height, speed, delay, sway). Horizontal and vertical landing
+    // use DIFFERENT random variables so the field fills the screen as a broad,
+    // even shower instead of collapsing into a diagonal band. Each drop drifts
+    // down slowly with its own pace, spreading across the whole lower half of
+    // the screen before condensing into the heart.
+    float delay=h1*0.72;                                    // staggered start
     float lp=clamp((uRain-delay)/(1.0-delay),0.0,1.0);
-    float fall=lp*lp;
-    float startY=-0.46-h2*0.30;
-    float cloudY=0.30+h3*0.16+(h2-0.5)*0.22;
-    vec2 cloud=vec2((h2-0.5)*0.10+(h3-0.5)*0.06, mix(startY,cloudY,fall));
+    float pace=0.55+h5*0.9;                                 // per-drop speed
+    float fall=clamp(lp*pace,0.0,1.0);
+    fall=fall*fall*(3.0-2.0*fall);                          // soft ease
+    float startY=-0.55-h4*0.34;                             // above the top edge
+    float cloudY=0.16+h3*0.62;                              // scattered landing
+    float laneX=(h2-0.5)*2.62+(h5-0.5)*0.22;                // full-width lanes
+    float sway=0.075*sin(uTime*0.85+aPhase*5.0+h4*6.2831)*(1.0-fall*0.5);
+    vec2 cloud=vec2(laneX+sway, mix(startY,cloudY,fall));
 
     // Heart: a large camera-facing heart centred a little above the middle.
     vec2 hp=heartPoint(aPhase,heartRim);
@@ -464,12 +473,17 @@ function makeFallback(cloud) {
         const h1=fract(Math.sin(p.phase*12.9898)*43758.5453);
         const h2=fract(Math.sin(p.phase*78.233)*24634.6345);
         const h3=fract(Math.sin(p.phase*45.164)*12543.123);
-        const delay=h1*0.40;
+        const h4=fract(Math.sin(p.phase*34.771)*6217.317);
+        const h5=fract(Math.sin(p.phase*57.913)*3719.541);
+        const delay=h1*0.72;
         const lp=Math.min(1,Math.max(0,(rainValue-delay)/(1-delay)));
-        const fall=lp*lp;
-        const startY=-0.46-h2*0.30;
-        const cloudY=0.30+h3*0.16+(h2-0.5)*0.22;
-        let px=(h2-0.5)*0.10+(h3-0.5)*0.06, py=startY+(cloudY-startY)*fall;
+        let fall=Math.min(1,Math.max(0,lp*(0.55+h5*0.9)));
+        fall=fall*fall*(3-2*fall);
+        const startY=-0.55-h4*0.34;
+        const cloudY=0.16+h3*0.62;
+        const laneX=(h2-0.5)*2.62+(h5-0.5)*0.22;
+        const sway=0.075*Math.sin(t*0.85+p.phase*5.0+h4*6.2831)*(1-fall*0.5);
+        let px=laneX+sway, py=startY+(cloudY-startY)*fall;
         const hp=heartJS(p.phase);
         const hx=hp.x*0.40, hy=0.42-hp.y*0.30;
         const hm=smooth(heartValue);
@@ -720,7 +734,7 @@ export function createTree(canvas,{onSelect}={}) {
   // lingers, a collapse to the tip, then a top-down bloom into the tree.
   // Optional ?slow=4 query parameter stretches the whole show for inspection.
   const slowFactor=(()=>{try{const v=parseFloat(new URLSearchParams(location.search).get('slow'));return v>=1&&v<=20?v:1}catch{return 1}})();
-  const RAIN_MS=2000*slowFactor, HEART_IN_MS=1800*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=900*slowFactor, GROW_MS=2600*slowFactor;
+  const RAIN_MS=3000*slowFactor, HEART_IN_MS=1800*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=900*slowFactor, GROW_MS=2600*slowFactor;
   const ENTRANCE_MS=RAIN_MS+HEART_IN_MS+HEART_HOLD_MS+CLUSTER_MS+GROW_MS;
   const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)');
   function resize() {
