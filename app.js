@@ -2,6 +2,7 @@ import {createTree} from './tree.js';
 import {drawLandscape} from './landscape.js';
 import {createGestures} from './gestures.js';
 import {createMusic} from './music.js';
+import {createTrainer,extractFeatures,LABELS,LABEL_NAMES} from './gesture-train.js';
 const shapes={
   book:'M3 4.5c3-1 6-.7 9 1 3-1.7 6-2 9-1v14c-3-1-6-.7-9 1-3-1.7-6-2-9-1z M12 5.5v14',
   camera:'M3 7h4l2-3h6l2 3h4v13H3z M15.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0',
@@ -11,6 +12,9 @@ const shapes={
   drag:'M3 12h18 M7 8l-4 4 4 4 M17 8l4 4-4 4',full:'M9 4H4v5 M15 4h5v5 M20 15v5h-5 M4 15v5h5',
   album:'M6 6h15v14H6z M3 16V3h14 M7 17l4-5 3 3 3-4 4 6 M10 10h.1',
   music:'M9 18V5l10-2v13 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0 M19 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
+  train:'M12 3a4 4 0 0 1 4 4v1a4 4 0 0 1-8 0V7a4 4 0 0 1 4-4z M4 21c0-4 3.6-6 8-6s8 2 8 6 M19 4l1 2 2 1-2 1-1 2-1-2-2-1 2-1z',
+  zen:'M3 12a9 9 0 0 1 18 0 M3 12h3 M18 12h3 M12 3v3 M12 18v3 M8 12a4 4 0 0 1 8 0',
+  ok:'M7 12a3 3 0 1 1 4.6-2.5L11 10 M7.5 12.5 10 15l4-5 M13 8l7 7 M20 8l-7 7',
   plus:'M12 5v14 M5 12h14',close:'M5 5l14 14 M19 5 5 19',left:'M15 5l-7 7 7 7',right:'M9 5l7 7-7 7'
 };
 for(const icon of document.querySelectorAll('[data-icon]')){
@@ -116,11 +120,40 @@ for(const dialog of [viewer,guide])dialog.addEventListener('click',e=>{if(e.targ
 drawLandscape(el('landscape'));
 const tree=createTree(el('tree'),{onSelect:showPhoto});
 
-// Opening curtain. The tree waits as a gathered ball of light; entering
-// parts the curtain and lets the particles unfurl into the tree.
+// Opening starfield guide. A three-scene, pure-frontend slideshow: tap or
+// swipe to advance, and the last scene lights the tree. The tree waits as a
+// gathered ball of light until the curtain parts.
 (function opening(){
   const intro=el('intro');
   if(!intro) return;
+  const slides=[...intro.querySelectorAll('.intro-slide')];
+  const dots=[...el('introDots').children];
+  const enterBtn=el('introEnter'), hint=el('introHint');
+  let index=0, entered=false;
+
+  // Drifting starfield on its own canvas, independent of the main scene.
+  const sky=el('introSky');
+  let skyStop=()=>{};
+  if(sky && !reducedMotion){
+    const c=sky.getContext('2d');
+    let w=0,h=0,dpr=1,raf=0,last=0,seed=91827;
+    const rnd=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+    const stars=Array.from({length:260},()=>({x:rnd(),y:rnd(),r:.3+rnd()**3*1.5,a:.15+rnd()*.6,ph:rnd()*6.28,sp:.3+rnd()*1.1}));
+    function resize(){const r=sky.getBoundingClientRect();if(!r.width||!r.height)return;dpr=Math.min(devicePixelRatio||1,1.5);w=r.width;h=r.height;sky.width=Math.round(w*dpr);sky.height=Math.round(h*dpr)}
+    function paint(now){raf=requestAnimationFrame(paint);if(document.hidden||!w)return;const dt=Math.min(80,last?now-last:16);last=now;const t=now/1000;
+      c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);
+      const g=c.createRadialGradient(w*.5,h*.46,0,w*.5,h*.46,Math.max(w,h)*.62);
+      g.addColorStop(0,'rgba(48,32,74,.55)');g.addColorStop(.5,'rgba(16,12,32,.35)');g.addColorStop(1,'rgba(4,4,12,0)');
+      c.fillStyle=g;c.fillRect(0,0,w,h);
+      for(const s of stars){const a=s.a*(.55+.45*Math.sin(t*s.sp+s.ph));c.globalAlpha=a;c.fillStyle=rnd()<.5?'#fff':'#ffe6f2';
+        c.beginPath();c.arc((s.x+.004*Math.sin(t*.2+s.ph))*w,s.y*h,s.r,0,6.2832);c.fill()}
+      c.globalAlpha=1;
+    }
+    resize();raf=requestAnimationFrame(paint);
+    const ro=new ResizeObserver(resize);ro.observe(sky);
+    skyStop=()=>{cancelAnimationFrame(raf);ro.disconnect()};
+  }
+
   if(!reducedMotion){
     const frag=document.createDocumentFragment();
     for(let i=0;i<46;i++){
@@ -135,29 +168,51 @@ const tree=createTree(el('tree'),{onSelect:showPhoto});
     }
     el('introSnow').replaceChildren(frag);
   }
+
   tree.setGather(true);
-  el('introEnter').focus({preventScroll:true});
-  let entered=false;
+
+  function show(next){
+    index=Math.max(0,Math.min(slides.length-1,next));
+    slides.forEach((s,i)=>s.classList.toggle('is-active',i===index));
+    dots.forEach((d,i)=>d.classList.toggle('is-active',i===index));
+    const last=index===slides.length-1;
+    enterBtn.classList.toggle('is-visible',last);
+    hint.textContent=last?'轻点「点亮圣诞树」或按 Enter 进入':'轻点任意处继续 · 左右滑动切换场景';
+  }
   function enter(){
-    if(entered) return;
+    if(entered)return;
     entered=true;
     window.removeEventListener('keydown',onKey,true);
+    skyStop();
     if(reducedMotion){intro.hidden=true;tree.setGather(false);tree.pulse(.6);return}
     intro.classList.add('leaving');
     tree.setGather(false);
     tree.pulse(1);
-    setTimeout(()=>{
-      intro.hidden=true;
-      try{el('tree').focus({preventScroll:true})}catch{}
-    },980);
+    setTimeout(()=>{intro.hidden=true;try{el('tree').focus({preventScroll:true})}catch{}},980);
   }
+  function advance(){ if(index<slides.length-1)show(index+1); else enter(); }
+
+  let startX=null;
+  intro.addEventListener('pointerdown',e=>{startX={x:e.clientX,y:e.clientY}});
+  intro.addEventListener('pointerup',e=>{
+    if(startX===null)return;
+    const dx=e.clientX-startX.x, dy=e.clientY-startX.y;startX=null;
+    if(Math.abs(dx)>44&&Math.abs(dx)>Math.abs(dy)){ show(index+(dx<0?1:-1)); return; }
+    if(Math.hypot(dx,dy)<10) advance();
+  });
+  intro.addEventListener('wheel',e=>{e.preventDefault();if(Math.abs(e.deltaY)>18)show(index+(e.deltaY>0?1:-1))},{passive:false});
   function onKey(e){
-    if(entered) return;
-    if(e.key==='Enter'||e.key===' '||e.key==='Spacebar'){e.preventDefault();enter()}
+    if(entered)return;
+    if(e.key==='ArrowRight'){e.preventDefault();show(index+1)}
+    else if(e.key==='ArrowLeft'){e.preventDefault();show(index-1)}
+    else if(e.key==='Enter'||e.key===' '||e.key==='Spacebar'){
+      e.preventDefault();
+      if(index<slides.length-1)show(index+1);else enter();
+    }
   }
-  el('introEnter').addEventListener('click',e=>{e.stopPropagation();enter()});
-  intro.addEventListener('click',enter);
+  enterBtn.addEventListener('click',e=>{e.stopPropagation();enter()});
   window.addEventListener('keydown',onKey,true);
+  show(0);
 })();
 
 function gallery(){
@@ -183,6 +238,36 @@ async function restore(){
   photos=[...records.map(p=>({src:URL.createObjectURL(p.blob),name:p.name})),...samples];gallery();
 }
 const restored=restore().catch(()=>notify('本地相册读取失败，可以重新添加照片。'));
+
+// Auto-discover photos placed in the photos/ folder. A static site cannot list
+// a directory, so we probe a manifest plus common names and add what exists.
+async function autoDiscoverPhotos(){
+  const known=new Set(photos.map(p=>p.src));
+  const candidates=new Set();
+  // 1) manifest.json, if the author provided one.
+  try{
+    const res=await fetch('./photos/manifest.json',{cache:'no-store'});
+    if(res.ok){const list=await res.json();if(Array.isArray(list))list.forEach(n=>{
+      if(typeof n==='string')candidates.add(n);
+    })}
+  }catch{}
+  // 2) common names users tend to drop in.
+  for(const base of ['photo','img','image','christmas','tree'])for(const ext of ['jpg','jpeg','png','webp'])for(let i=1;i<=6;i++)candidates.add(base+'-'+i+'.'+ext);
+  const found=[];
+  await Promise.all([...candidates].slice(0,40).map(src=>new Promise(resolve=>{
+    if(known.has('./photos/'+src))return resolve();
+    const img=new Image();
+    img.onload=()=>{if(img.naturalWidth>0)found.push({src:'./photos/'+src,name:src.replace(/\.[^.]+$/,'').replace(/[-_]/g,' ')}) ;resolve()};
+    img.onerror=()=>resolve();
+    img.src='./photos/'+src;
+  })));
+  if(found.length){
+    const start=photos.length-samples.length;
+    photos.splice(start,0,...found);gallery();
+    notify('已自动挂上 '+found.length+' 张目录照片');
+  }
+}
+const autoPhotos=autoDiscoverPhotos().catch(()=>{});
 async function preparePhoto(file){
   const src=URL.createObjectURL(file);
   try{
@@ -197,7 +282,7 @@ async function preparePhoto(file){
 el('upload').onclick=()=>el('files').click();
 el('files').onchange=async()=>{
   const files=[...el('files').files];if(!files.length)return;
-  el('files').value='';el('upload').disabled=true;await restored;
+  el('files').value='';el('upload').disabled=true;await restored;await autoPhotos;
   const fresh=[];for(const file of files){try{fresh.push(await preparePhoto(file))}catch{}}
   if(fresh.length){
     const db=await database;let saved=false;
@@ -236,6 +321,66 @@ function drawHandPreview(frame){
 }
 let cameraRequest=0;
 function cameraState(on){cameraOn=on;el('handPreview').hidden=!on;el('camera').querySelector('span').textContent=on?'关闭摄像头':'开启摄像头';scene.classList.toggle('active',on)}
+
+// ---- New V2 UI state: trainer panel, zen mode, wishes, inscription ----
+const train=el('train'), wishOverlay=el('wishOverlay');
+let zenOn=false;
+
+function drawTrainBars(votes){
+  const box=el('trainBars');
+  if(!box.children.length){
+    box.replaceChildren(...LABELS.map(l=>{
+      const row=document.createElement('div');row.className='train-bar';
+      row.innerHTML='<span>'+LABEL_NAMES[l]+'</span><i></i>';
+      return row;
+    }));
+  }
+  [...box.children].forEach((row,i)=>{
+    const v=votes[LABELS[i]]||0;
+    row.querySelector('i').style.width=Math.round(v*100)+'%';
+  });
+}
+function refreshTrainCount(){
+  const n=trainer.size();
+  el('trainCount').textContent=n?('本地训练集：'+n+' 条 · '+Object.entries(trainer.counts()).map(([k,v])=>LABEL_NAMES[k]+' '+v).join('，')):'暂无训练样本';
+}
+
+// A wish appears on OK: particles scatter like starlight and a random line fades in.
+const WISHES=[
+  '愿你这一年的所有等待，都在今晚开出花来。',
+  '愿你所念之人，都在灯火可亲处。',
+  '把烦恼交给风，把心愿挂上树，把温柔留给自己。',
+  '愿星光替我，照亮你回家的路。',
+  'Merry Christmas · 愿你被这个世界温柔以待。',
+  '今年的圣诞，谢谢你和我在一起。',
+  '愿每一个平凡的日子，都有微小而确实的幸福。'
+];
+let wishTimer;
+function grantWish(){
+  if(zenOn)return;
+  tree.setScatter(true);tree.pulse(1);
+  el('wishText').textContent=WISHES[Math.floor(Math.random()*WISHES.length)];
+  wishOverlay.hidden=false;
+  clearTimeout(wishTimer);
+  wishTimer=setTimeout(closeWish,12000);
+}
+function closeWish(){
+  wishOverlay.hidden=true;
+  tree.setScatter(false);tree.setGather(false);
+}
+
+// Gesture trainer: local k-NN model, optional ML takeover of pose recognition.
+const trainer=createTrainer();
+let lastFeatures=null, lastPrediction=null, mlPose=null, mlPoseAt=0;
+
+function applyPose(pose){
+  if(viewer.open||guide.open||zenOn)return;
+  if(pose==='fist'){tree.setGather(true)}
+  else if(pose==='palm'){tree.setScatter(true);tree.pulse(.35)}
+  else if(pose==='idle'){tree.setGather(false);tree.setScatter(false)}
+  else if(pose==='ok'){/* OK is an action, handled separately */}
+}
+
 const gestures=createGestures({
   onDoublePinch(){tree.pulse(1);if(!guide.open){if(viewer.open)cycle();else showPhoto(selected)}},
   onFist(){tree.pulse(.6);if(viewer.open){closeViewer();tree.setGather(true)}},
@@ -244,14 +389,37 @@ const gestures=createGestures({
     // photo is showing closes it (onFist, above), and an open palm while
     // viewing must not expand the tree behind the dialog.
     if(viewer.open||guide.open)return;
-    if(pose==='fist')tree.setGather(true);
-    else if(pose==='palm')tree.setGather(false);
+    if(trainer.enabled){
+      // ML takeover: the rule label is ignored; the k-NN prediction drives it.
+      if(lastPrediction && now()-mlPoseAt>160){
+        const label=lastPrediction.label;
+        const mapped=label==='fist'?'fist':label==='palm'?'palm':label==='ok'?'ok':'idle';
+        if(mapped!==mlPose){mlPose=mapped;mlPoseAt=now();applyPose(mapped)}
+      }
+      return;
+    }
+    applyPose(pose);
   },
+  onFeatures(points){
+    lastFeatures=extractFeatures(points);
+    if(!lastFeatures)return;
+    lastPrediction=trainer.predict(lastFeatures);
+    // Feed the trainer's live readout when its panel is open.
+    if(train.open){
+      el('trainGuess').textContent=lastPrediction?LABEL_NAMES[lastPrediction.label]:'需训练样本';
+      el('trainConfidence').textContent=lastPrediction?Math.round(lastPrediction.confidence*100)+'%':'';
+      const votes={};LABELS.forEach(l=>votes[l]=0);
+      if(lastPrediction)votes[lastPrediction.label]=lastPrediction.confidence;
+      drawTrainBars(votes);
+    }
+  },
+  onOK(){grantWish()},
   onRotate(delta){if(!viewer.open&&!guide.open)tree.rotate(delta)},
   onStatus(message){el('status').textContent=message},
   onFrame(frame){drawHandPreview(frame)},
   onError(error){cameraState(false);notify(error.message)}
 });
+const now=()=>performance.now();
 const music=createMusic();
 function refreshMusicButton(playing){
   const button=el('music');
@@ -282,12 +450,78 @@ el('camera').onclick=async()=>{
   }
 };
 document.addEventListener('keydown',e=>{
+  // Trainer: number keys record the currently held gesture into the local set.
+  if(train.open && ['1','2','3','4','5'].includes(e.key) && cameraOn && lastFeatures){
+    const label=LABELS[Number(e.key)-1];
+    if(trainer.add(label,lastFeatures)){refreshTrainCount();notify('已记录：'+LABEL_NAMES[label]);el('trainGuess').textContent=LABEL_NAMES[label]}
+    return;
+  }
+  if(e.key==='p'||e.key==='P'){if(!/input|textarea/i.test(e.target.tagName)){e.preventDefault();toggleZen(!zenOn)}}
+  if(!wishOverlay.hidden && e.key==='Escape'){closeWish();return}
   if(viewer.open&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();cycle(e.key==='ArrowLeft'?-1:1)}
-  else if(e.target===el('tree')&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();tree.rotate(e.key==='ArrowLeft'?-.25:.25)}
+  else if(!viewer.open && (e.target===el('tree')||e.target===document.body)&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();tree.rotate(e.key==='ArrowLeft'?-.25:.25)}
   else if(e.key==='Escape'&&scene.classList.contains('expanded'))toggleExpanded(false);
 });
 function fullLabel(on){el('full').setAttribute('aria-label',on?'退出全屏':'进入全屏');el('full').title=on?'退出全屏':'全屏'}
 function toggleExpanded(on){scene.classList.toggle('expanded',on);fullLabel(on)}
 el('full').onclick=async()=>{if(scene.classList.contains('expanded'))return toggleExpanded(false);if(document.fullscreenElement)return document.exitFullscreen();try{await scene.requestFullscreen()}catch{toggleExpanded(true)}};
 document.addEventListener('fullscreenchange',()=>fullLabel(!!document.fullscreenElement));
+
+// ---- Trainer UI ----
+el('trainBtn').onclick=()=>{train.showModal();refreshTrainCount();drawTrainBars({});if(!cameraOn)notify('开启摄像头后即可实时采集与训练手势。')};
+el('train').querySelectorAll('.train-keys button').forEach(b=>b.onclick=()=>{
+  if(!cameraOn||!lastFeatures){notify('请先开启摄像头并让手进入画面。');return}
+  const label=b.dataset.label;
+  if(trainer.add(label,lastFeatures)){refreshTrainCount();notify('已记录：'+LABEL_NAMES[label])}
+});
+el('trainUndo').onclick=()=>{if(trainer.undo()){refreshTrainCount();notify('已撤销上一条')}};
+el('trainClear').onclick=()=>{trainer.clear();refreshTrainCount();notify('训练集已清空')};
+el('trainExport').onclick=()=>{
+  const blob=new Blob([trainer.exportJSON()],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='gesture-training.json';a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
+el('trainImport').onclick=()=>el('trainFile').click();
+el('trainFile').onchange=async()=>{
+  const f=el('trainFile').files?.[0];if(!f)return;
+  const ok=trainer.importJSON(await f.text());el('trainFile').value='';
+  refreshTrainCount();notify(ok?'训练数据已导入':'导入失败，文件格式不正确');
+};
+el('trainEnable').onchange=e=>{trainer.enabled=e.target.checked;mlPose=null;notify(trainer.enabled?'ML 接管已开启':'ML 接管已关闭，恢复规则识别')};
+
+// ---- Zen (clean-view) mode ----
+function toggleZen(on){
+  zenOn=on;
+  document.body.classList.toggle('zen',on);
+  // Inline styles guarantee the chrome hides regardless of cascade order.
+  for(const node of [document.querySelector('.gallery'),scene.querySelector('.gestures'),scene.querySelector('.scene-end')]){
+    if(node)node.style.display=on?'none':'';
+  }
+  el('zenBtn').classList.toggle('playing',on);
+  el('zenBtn').querySelector('span').textContent=on?'退出观赏':'净屏';
+  if(on){tree.setGather(false);tree.setScatter(false);if(!wishOverlay.hidden)closeWish()}
+}
+el('zenBtn').onclick=()=>toggleZen(!zenOn);
+
+// ---- Wish overlay ----
+el('wishClose').onclick=closeWish;
+
+// ---- To inscription (editable) ----
+(function inscription(){
+  const box=el('inscription'),textEl=el('inscriptionText');
+  const KEY='noel-inscription';
+  try{const saved=localStorage.getItem(KEY);if(saved)textEl.textContent=saved}catch{}
+  function edit(){
+    const current=textEl.textContent;
+    const value=window.prompt('写一句想对 TA 说的话（题字）',current==='你'?'':current);
+    if(value===null)return;
+    const next=value.trim().slice(0,40)||'你';
+    textEl.textContent=next;
+    try{localStorage.setItem(KEY,next)}catch{}
+  }
+  box.addEventListener('click',edit);
+  box.setAttribute('role','button');box.tabIndex=0;
+  box.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();edit()}});
+})();
+
 window.addEventListener('pagehide',()=>{++cameraRequest;gestures.stop();music.stop();refreshMusicButton(false);el('camera').removeAttribute('aria-busy');cameraState(false)});

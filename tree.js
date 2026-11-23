@@ -184,8 +184,19 @@ uniform float uTime;
 uniform float uPulse;
 uniform float uIntro;
 uniform float uGather;
+uniform float uScatter;
 varying vec3 vColor;
 varying float vBrightness;
+// Deterministic pseudo-random direction from a particle's phase, so the
+// scatter target needs no extra vertex attribute.
+vec3 starDir(float phase){
+  float a=phase*12.9898, b=phase*78.233, c=phase*37.719;
+  float theta=fract(sin(a)*43758.5453)*6.2831853;
+  float z=fract(sin(b)*24634.6345)*2.0-1.0;
+  float r=sqrt(max(0.0,1.0-z*z));
+  float rad=0.62+fract(sin(c)*15731.743)*1.02;
+  return vec3(cos(theta)*r,z,sin(theta)*r)*rad;
+}
 void main() {
   vec3 p=aPosition;
   float s=uRotation.x, c=uRotation.y;
@@ -235,6 +246,19 @@ void main() {
     x = pos.x; y = pos.y;
     brightness *= 1.0 + uGather * 0.55;
   }
+  // Scatter: the tree dissolves into a slowly drifting field of stars. Each
+  // particle keeps its own direction and gentle orbital drift so the cloud
+  // reads as scattered starlight, not a frozen explosion. Photos follow on
+  // the 2D layer via the same scatter value.
+  if (uScatter > 0.001 && aKind < 2.5) {
+    vec3 dir = starDir(aPhase);
+    float drift = 0.045*sin(uTime*(0.28+0.12*dir.x)+aPhase);
+    vec2 dest = vec2(dir.x*0.92, 0.42 + dir.y*0.66 + drift);
+    vec2 pos = mix(vec2(x, y), dest, uScatter);
+    x = pos.x; y = pos.y;
+    shimmer = mix(shimmer, 0.55 + 0.75*pow(0.5+0.5*sin(uTime*1.6+aPhase*3.0),2.0), uScatter);
+    brightness *= 1.0 + uScatter*0.35;
+  }
   vec2 screen=(uOrigin+uScale*vec2(x,y))/uViewport;
   gl_Position=vec4(screen.x*2.0-1.0,1.0-screen.y*2.0,0.0,1.0);
   gl_PointSize=max(1.7*uRatio,aSize*uScale*uRatio*(2.65+2.9*crown)*(0.45+0.55*uIntro)*(1.0+uGather*0.3));
@@ -278,14 +302,14 @@ function createGPU(canvas, cloud) {
     const loc=gl.getAttribLocation(program,name);
     gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,components,gl.FLOAT,false,STRIDE*4,offset*4);
   }
-  const [viewport,origin,rotation,scale,ratio,time,pulse,intro,gather] = ['uViewport','uOrigin','uRotation','uScale','uRatio','uTime','uPulse','uIntro','uGather'].map(n=>gl.getUniformLocation(program,n));
+  const [viewport,origin,rotation,scale,ratio,time,pulse,intro,gather,scatter] = ['uViewport','uOrigin','uRotation','uScale','uRatio','uTime','uPulse','uIntro','uGather','uScatter'].map(n=>gl.getUniformLocation(program,n));
   gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.clearColor(0,0,0,0);
   return {
-    draw(view, sn, cs, t, pulseValue, introValue, gatherValue = 0) {
+    draw(view, sn, cs, t, pulseValue, introValue, gatherValue = 0, scatterValue = 0) {
       gl.viewport(0,0,canvas.width,canvas.height); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2f(viewport,view.w,view.h); gl.uniform2f(origin,view.x,view.y);
       gl.uniform2f(rotation,sn,cs); gl.uniform1f(scale,view.s); gl.uniform1f(ratio,view.dpr);
-      gl.uniform1f(time,t); gl.uniform1f(pulse,pulseValue); gl.uniform1f(intro,introValue); gl.uniform1f(gather,gatherValue);
+      gl.uniform1f(time,t); gl.uniform1f(pulse,pulseValue); gl.uniform1f(intro,introValue); gl.uniform1f(gather,gatherValue); gl.uniform1f(scatter,scatterValue);
       gl.drawArrays(gl.POINTS,0,cloud.length/STRIDE);
     },
     destroy() { gl.deleteBuffer(buffer); gl.deleteProgram(program); }
@@ -315,7 +339,13 @@ function makeFallback(cloud) {
       : kind===2?13+Math.floor(cloud[i+8]*.435):Math.min(12,Math.max(0,Math.round((cloud[i+4]-.26)/.74*12)));
     points.push({x:cloud[i],y:cloud[i+1],z:cloud[i+2],s:cloud[i+3],b:cloud[i+7],phase:cloud[i+8],kind,sprite:sprites[shade]});
   }
-  return (c,view,sn,cs,t,pulseValue=0,introValue=1,gatherValue=0)=>{
+  const scatterTarget=(phase)=>{
+    const a=Math.sin(phase*12.9898)*43758.5453, b=Math.sin(phase*78.233)*24634.6345, cc=Math.sin(phase*37.719)*15731.743;
+    const theta=(a-Math.floor(a))*Math.PI*2, z=(b-Math.floor(b))*2-1, rad=.62+(cc-Math.floor(cc))*1.02;
+    const r=Math.sqrt(Math.max(0,1-z*z));
+    return {x:Math.cos(theta)*r*rad, y:z*rad};
+  };
+  return (c,view,sn,cs,t,pulseValue=0,introValue=1,gatherValue=0,scatterValue=0)=>{
     c.globalCompositeOperation='lighter';
     for(const p of points) {
       let x=p.x*cs+p.z*sn;
@@ -342,6 +372,13 @@ function makeFallback(cloud) {
         const gx = Math.sin(p.phase*12.9898) * 0.028, gy = 0.45 + Math.cos(p.phase*7.233) * 0.028;
         x = x + (gx - x) * gatherValue; y = y + (gy - y) * gatherValue;
         a *= 1 + gatherValue * 0.55;
+      }
+      if (scatterValue > 0.001 && p.kind < 2.5) {
+        const dir=scatterTarget(p.phase);
+        const drift=.045*Math.sin(t*(.28+.12*dir.x)+p.phase);
+        const dx=dir.x*.92, dy=.42+dir.y*.66+drift;
+        x=x+(dx-x)*scatterValue; y=y+(dy-y)*scatterValue;
+        a*=1+scatterValue*.35;
       }
       const crown=p.kind===0?Math.max(0,1-p.y/.7):0;
       const r=Math.max(1.1,p.s*view.s*(1.95+crown*.90)*(1+gatherValue*0.3));
@@ -460,6 +497,7 @@ export function createTree(canvas,{onSelect}={}) {
   let drag=null, frame=0, last=0, animationTime=0, stopped=false, pauseOrbitUntil=0;
   let pulseValue=0, startedAt=0, parallax=0, parallaxTarget=0;
   let gatherValue=0, gatherTarget=0;
+  let scatterValue=0, scatterTarget=0, scatterDirs=[];
   const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)');
   function resize() {
     const {width:w,height:h}=canvas.getBoundingClientRect();
@@ -481,8 +519,15 @@ export function createTree(canvas,{onSelect}={}) {
     });
   }
 
-  function drawPhotos(sn,cs,originX,gatherValue=0) {
+  function drawPhotos(sn,cs,originX,gatherValue=0,scatterValue=0) {
     hits=[];
+    // Each photo gets a stable scatter direction derived from its index.
+    if (scatterDirs.length!==photos.length) {
+      scatterDirs=photos.map((_,i)=>{
+        const a=Math.sin((i+1)*12.9898)*43758.5453, b=Math.sin((i+1)*78.233)*24634.6345;
+        return {x:(a-Math.floor(a))*2-1, y:(b-Math.floor(b))*2-1};
+      });
+    }
     const list=photos.map(p=>({p,z:p.z*cs-p.x*sn})).sort((a,b)=>a.z-b.z);
     for(const {p,z} of list) {
       if (!p.img.naturalWidth || z < -p.r*.11) continue;
@@ -493,10 +538,20 @@ export function createTree(canvas,{onSelect}={}) {
       // instead of floating where the tree used to be.
       x=originX+(x-originX)*(1-gatherValue*0.7);
       y=view.y+view.s*0.45+(y-(view.y+view.s*0.45))*(1-gatherValue*0.7);
-      const w=view.s*(.077+.044*z)*(1-gatherValue*0.55), h=w*1.09;
+      let w=view.s*(.077+.044*z)*(1-gatherValue*0.55), h=w*1.09;
+      let tilt=p.tilt, twinkle=1;
+      // Scatter: photos drift out into the starfield like floating starlight.
+      if (scatterValue>0.001) {
+        const d=scatterDirs[p.index]||{x:0,y:0};
+        const dx=originX+d.x*view.s*.72, dy=view.y+view.s*.40+d.y*view.s*.60;
+        x+=(dx-x)*scatterValue; y+=(dy-y)*scatterValue;
+        tilt+=scatterValue*.34*Math.sin(animationTime*.6+p.index);
+        w*=1-scatterValue*.16; h=w*1.09;
+        twinkle=.78+.22*Math.sin(animationTime*1.7+p.index*1.3);
+      }
       const iw=w*.88, ih=h*.79, crop=Math.max(iw/p.img.naturalWidth,ih/p.img.naturalHeight);
       const sw=iw/crop, sh=ih/crop;
-      ctx.save();ctx.globalAlpha=alpha;ctx.translate(x,y);ctx.rotate(p.tilt);
+      ctx.save();ctx.globalAlpha=alpha*twinkle;ctx.translate(x,y);ctx.rotate(tilt);
       ctx.shadowColor='rgba(160,195,255,.4)';ctx.shadowBlur=Math.max(2,view.s*.018);
       ctx.lineWidth=Math.max(.6,view.s*.001);ctx.strokeStyle='#b7d3fa';
       ctx.beginPath();ctx.moveTo(-w*.37,-h*.47);ctx.lineTo(0,-h*.64);ctx.lineTo(w*.37,-h*.47);ctx.stroke();
@@ -505,7 +560,7 @@ export function createTree(canvas,{onSelect}={}) {
       ctx.shadowBlur=0;
       ctx.drawImage(p.img,(p.img.naturalWidth-sw)/2,(p.img.naturalHeight-sh)/2,sw,sh,-iw*.5,-h*.425,iw,ih);
       ctx.restore();
-      if (alpha>.36 && gatherValue<0.5) hits.push({index:p.index,x,y,w,h});
+      if (alpha>.36 && gatherValue<0.5 && scatterValue<0.35) hits.push({index:p.index,x,y,w,h});
     }
   }
   function draw(now) {
@@ -532,6 +587,14 @@ export function createTree(canvas,{onSelect}={}) {
       gatherValue += (gatherTarget - gatherValue) * (1 - Math.exp(-rate * dt));
       if (Math.abs(gatherTarget - gatherValue) < 0.002) gatherValue = gatherTarget;
     }
+    // Scatter eases slowly outward like drifting starlight; reforming is a
+    // little quicker. Gather and scatter are mutually exclusive by design.
+    if (reducedMotion?.matches) scatterValue = scatterTarget;
+    else {
+      const rate = scatterTarget > scatterValue ? 0.9 : 1.8;
+      scatterValue += (scatterTarget - scatterValue) * (1 - Math.exp(-rate * dt));
+      if (Math.abs(scatterTarget - scatterValue) < 0.002) scatterValue = scatterTarget;
+    }
     parallax += (parallaxTarget - parallax) * (1 - Math.exp(-6 * dt));
     const originX = view.x + parallax;
     angle+=(target-angle)*(1-Math.exp(-14*dt));
@@ -539,19 +602,23 @@ export function createTree(canvas,{onSelect}={}) {
     ctx.setTransform(view.dpr,0,0,view.dpr,0,0);
     ctx.clearRect(0,0,view.w,view.h);
     const shiftedView = {...view, x: originX};
-    if(gpu) gpu.draw(shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue);
-    else fallback(ctx,shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue);
+    if(gpu) gpu.draw(shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue);
+    else fallback(ctx,shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue);
     const glowSize=view.s*(.236+.004*Math.sin(animationTime*1.8))*(1+pulseValue*.35);
+    ctx.globalAlpha=1-scatterValue*.85;
     ctx.drawImage(heartGlow,originX-glowSize*.5,view.y-view.s*.06-glowSize*.5,glowSize,glowSize);
     const groundW=view.s*1.06, groundH=view.s*.20;
     ctx.drawImage(groundGlow,originX-groundW*.5,view.y+view.s*1.01-groundH*.5,groundW,groundH);
-    drawGifts(ctx,{...view,x:originX},sn,gatherValue);
-    drawPhotos(sn,cs,originX,gatherValue);
+    ctx.globalAlpha=1;
+    drawGifts(ctx,{...view,x:originX},sn,Math.max(gatherValue,scatterValue));
+    drawPhotos(sn,cs,originX,gatherValue,scatterValue);
   }
 
   function pulse(strength=1) { pulseValue = Math.max(pulseValue, Math.min(1, strength)); }
 
-  function setGather(on) { gatherTarget = on ? 1 : 0; }
+  function setGather(on) { gatherTarget = on ? 1 : 0; if (on) scatterTarget = 0; }
+
+  function setScatter(on) { scatterTarget = on ? 1 : 0; if (on) gatherTarget = 0; }
 
   function rotate(delta) {
     if(!Number.isFinite(delta)) return;
@@ -600,7 +667,7 @@ export function createTree(canvas,{onSelect}={}) {
   canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);
   canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);
   const observer=new ResizeObserver(resize);observer.observe(canvas);resize();frame=requestAnimationFrame(draw);
-  return {setPhotos,rotate,pulse,setGather,destroy() {
+  return {setPhotos,rotate,pulse,setGather,setScatter,destroy() {
     stopped=true;cancelAnimationFrame(frame);observer.disconnect();gpu?.destroy();stage.remove();
     canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);
     canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);

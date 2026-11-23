@@ -7,10 +7,10 @@ function fingerExtended(points, tip, scale) {
   const joint = points[tip - 2];
   const end = points[tip];
   const knuckle = points[tip - 3];
-  // Relaxed from 0.16/1.45: a hand turned sideways or slightly bent was
-  // previously read as folded, which broke palm rotation and fist detection.
-  return length(end, points[0]) > length(joint, points[0]) + scale * 0.12
-    && length(end, knuckle) > length(joint, knuckle) * 1.32;
+  // Sensitivity raised for V2: lower thresholds so a hand turned sideways or
+  // held at an angle still reads as open, which makes palm rotation responsive.
+  return length(end, points[0]) > length(joint, points[0]) + scale * 0.08
+    && length(end, knuckle) > length(joint, knuckle) * 1.22;
 }
 
 // Exponential smoothing over successive landmark sets. Raw MediaPipe
@@ -25,11 +25,11 @@ function smoothLandmarks(previous, current, alpha) {
   }));
 }
 
-export function createGestureInterpreter({ onDoublePinch, onFist, onRotate, onStatus, onFrame, onPose }) {
+export function createGestureInterpreter({ onDoublePinch, onFist, onRotate, onStatus, onFrame, onPose, onOK, onFeatures }) {
   let lastStatus;
   let lastSeen = -Infinity;
-  let firstPinch, candidateSince, fistSince, palmX, lastPalmX;
-  let pinched, fistFired, cooldownUntil;
+  let firstPinch, candidateSince, fistSince, palmX, lastPalmX, okSince;
+  let pinched, fistFired, okFired, cooldownUntil;
   let smoothImage = null, smoothWorld = null, absentSent = false;
   // Definitive hand pose, emitted only on change: 'fist' | 'palm' | 'idle' | 'absent'.
   // Transient frames do not emit, so the tree does not flicker between
@@ -41,8 +41,8 @@ export function createGestureInterpreter({ onDoublePinch, onFist, onRotate, onSt
     onPose?.(next);
   }
   function reset() {
-    firstPinch = candidateSince = fistSince = palmX = lastPalmX = null;
-    pinched = fistFired = false;
+    firstPinch = candidateSince = fistSince = palmX = lastPalmX = okSince = null;
+    pinched = fistFired = okFired = false;
     cooldownUntil = 0;
     smoothImage = smoothWorld = null;
   }
@@ -70,8 +70,10 @@ export function createGestureInterpreter({ onDoublePinch, onFist, onRotate, onSt
     const rawWorld = result.worldLandmarks?.[0] ?? image.map(v => ({
       x: v.x * aspect, y: v.y, z: (v.z ?? 0) * aspect
     }));
-    smoothImage = smoothLandmarks(smoothImage, image, .5);
-    smoothWorld = smoothLandmarks(smoothWorld, rawWorld, .5);
+    // Higher alpha tracks faster hand motion for responsive rotation while
+    // still filtering single-frame jitter.
+    smoothImage = smoothLandmarks(smoothImage, image, .62);
+    smoothWorld = smoothLandmarks(smoothWorld, rawWorld, .62);
     const p = smoothWorld;
     const scale = (length(p[0], p[9]) + length(p[5], p[17])) * 0.5;
     if (scale < 0.00001) return;
@@ -83,16 +85,38 @@ export function createGestureInterpreter({ onDoublePinch, onFist, onRotate, onSt
     // a fast pinch by a frame or two and a quick double pinch was missed.
     const rawScale = (length(rawWorld[0], rawWorld[9]) + length(rawWorld[5], rawWorld[17])) * 0.5;
     const pinchGap = distanceRatio(rawWorld[4], rawWorld[8], rawScale);
+    // OK gesture: thumb and index form a ring while the other three fingers
+    // stay extended. A separate circle threshold keeps it distinct from pinch.
+    const okCircle = distanceRatio(p[4], p[8], scale) < 0.42;
+    const okOther = [12, 16, 20].every(t => extended[t === 12 ? 1 : t === 16 ? 2 : 3]);
+    const ok = okCircle && okOther && !fist;
+    // Feature feed for the gesture trainer (rotation/scale/translation free).
+    onFeatures?.(p, scale);
     // Live preview data: the UI draws the skeleton and the pinch meter from
     // this, so the user can see whether the hand is actually being tracked.
     onFrame?.({
       present: true,
       landmarks: smoothImage,
-      pinchGap, pinched, fist,
+      pinchGap, pinched, fist, ok,
       extendedCount: extended.filter(Boolean).length,
       handScale: scale,
       distance: scale < 0.055 ? 'far' : scale > 0.115 ? 'near' : 'ok',
     });
+
+    if (ok) {
+      fistSince = palmX = lastPalmX = candidateSince = null;
+      okSince ??= now;
+      if (now - okSince >= 220 && !okFired) {
+        okFired = true;
+        firstPinch = null;
+        pinched = true;
+        status('已识别 OK · 心愿成真');
+        onOK?.();
+      }
+      return;
+    }
+    okSince = null;
+    okFired = false;
 
     if (fist) {
       palmX = lastPalmX = candidateSince = null;
@@ -151,11 +175,13 @@ export function createGestureInterpreter({ onDoublePinch, onFist, onRotate, onSt
     if (extended.filter(Boolean).length >= 3 && !pinched && pinchGap > 0.50) {
       emitPose('palm');
       // A front-facing camera shows mirrored movement to the person using it.
+      // V2 sensitivity: faster smoothing, smaller dead zone and a larger
+      // rotation multiplier so a modest palm sweep turns the tree noticeably.
       const x = 1 - (smoothImage[0].x + smoothImage[9].x + smoothImage[5].x + smoothImage[17].x) / 4;
-      palmX = palmX === null ? x : palmX + (x - palmX) * 0.55;
-      if (lastPalmX !== null && Math.abs(palmX - lastPalmX) > 0.0015) {
-        const movement = Math.max(-0.11, Math.min(0.11, palmX - lastPalmX));
-        onRotate?.(movement * 5);
+      palmX = palmX === null ? x : palmX + (x - palmX) * 0.65;
+      if (lastPalmX !== null && Math.abs(palmX - lastPalmX) > 0.0008) {
+        const movement = Math.max(-0.13, Math.min(0.13, palmX - lastPalmX));
+        onRotate?.(movement * 9);
         lastPalmX = palmX;
       }
       lastPalmX ??= palmX;
