@@ -11,9 +11,10 @@ function seededRandom(seed) {
 }
 
 function colorAt(y, tint) {
-  // Cool blue near the ground, almost paper-white at the tree tip.
-  const f = Math.min(1, Math.max(0, (1.02 - y) ** 1.6 + tint));
-  return [0.26 + 0.74*f, 0.49 + 0.50*f, 0.94 + 0.06*f];
+  // Reference video palette: deep magenta at the ground, luminous pink-white
+  // toward the tip. `f` is 1 at the tip and 0 at the base.
+  const f = Math.min(1, Math.max(0, (1.02 - y) ** 1.45 + tint));
+  return [0.52 + 0.46*f, 0.11 + 0.44*f, 0.38 + 0.56*f];
 }
 
 function radiusAt(y) {
@@ -78,13 +79,13 @@ function makeCloud() {
       const r = radius + Math.sin(a*3+band)*.005 + spread()*(.005+band*.0021);
       const intensity=(.22+random()*.63)*(.71+.29*Math.sin(a*2+band));
       add(Math.cos(a)*r, 1.018 + band*.004 + spread()*.0036, Math.sin(a)*r,
-        .0011+random()**2*.0028, [.35+random()*.25,.61+random()*.21,1],intensity,4+band);
+        .0011+random()**2*.0028, [.92+random()*.08,.42+random()*.26,.74+random()*.22],intensity,4+band);
     }
   }
   for (let i=0; i<600; i++) {
     const a=random()*TAU;
     const r=.19+Math.sqrt(random())*.40;
-    add(Math.cos(a)*r, 1.03+spread()*.009, Math.sin(a)*r,.001+random()*.002,[.40,.63,1],random()*.35,1);
+    add(Math.cos(a)*r, 1.03+spread()*.009, Math.sin(a)*r,.001+random()*.002,[.72,.40,.78],random()*.35,1);
   }
   // A camera-facing hollow heart preserves its silhouette at every viewing angle.
   for (let i=0; i<900; i++) {
@@ -140,7 +141,7 @@ function makeCloud() {
   // Festive fairy lights: multicoloured baubles strung over the branches.
   // Each bulb carries its own phase, so the vertex shader blinks them out of
   // sync like the string lights of a classic Python turtle Christmas tree.
-  const festive = [[1,.28,.34],[1,.78,.26],[.34,1,.55],[1,.45,.72],[.42,.78,1]];
+  const festive = [[1,.42,.66],[1,.72,.44],[.92,.48,.86],[1,.58,.78],[.98,.80,.52]];
   for (let i=0; i<1200; i++) {
     const y = .02 + Math.pow(random(), .72) * .94;
     const a = random() * TAU;
@@ -185,8 +186,10 @@ uniform float uPulse;
 uniform float uIntro;
 uniform float uGather;
 uniform float uScatter;
-uniform float uRain;   // entrance: 0..1 falling from the top of the screen
-uniform float uMorph;  // entrance: 0..1 pile-of-light spirals into the tree
+uniform float uRain;    // entrance 1: 0..1 particle curtain falls from the top
+uniform float uHeart;   // entrance 2: 0..1 scattered cloud condenses into a heart
+uniform float uCluster; // entrance 3: 0..1 heart collapses to a glowing bud at the tip
+uniform float uGrow;    // entrance 4: 0..1 bud grows downward into the tree
 varying vec3 vColor;
 varying float vBrightness;
 // Deterministic pseudo-random direction from a particle's phase, so the
@@ -198,6 +201,18 @@ vec3 starDir(float phase){
   float r=sqrt(max(0.0,1.0-z*z));
   float rad=0.62+fract(sin(c)*15731.743)*1.02;
   return vec3(cos(theta)*r,z,sin(theta)*r)*rad;
+}
+// A stable target point on a large, camera-facing heart (the video's signature
+// beat). The outline is a bright rim; the interior is filled with a soft cloud.
+vec2 heartPoint(float phase, out float rim){
+  float t=fract(phase*0.15915494)*6.2831853;
+  float hx=sin(t)*sin(t)*sin(t);
+  float hy=(13.0*cos(t)-5.0*cos(2.0*t)-2.0*cos(3.0*t)-cos(4.0*t))/16.0;
+  float edge=step(0.62,fract(sin(phase*44.113)*9157.31));
+  float interior=sqrt(fract(sin(phase*27.71)*5731.17));
+  rim=edge;
+  float f=mix(interior*0.92,1.0,edge);
+  return vec2(hx*f,hy*f);
 }
 void main() {
   vec3 p=aPosition;
@@ -261,37 +276,61 @@ void main() {
     shimmer = mix(shimmer, 0.55 + 0.75*pow(0.5+0.5*sin(uTime*1.6+aPhase*3.0),2.0), uScatter);
     brightness *= 1.0 + uScatter*0.35;
   }
-  // Entrance show. While uRain<1 the particle falls from above the screen as
-  // a raindrop, then piles up along the ground. Once uMorph>0 the whole pile
-  // spins (a sine pulse, so the spin is zero at both ends) and screwdrives
-  // into its final tree position. At uRain=uMorph=1 nothing changes, so the
-  // show settles seamlessly into the ordinary tree.
-  if (uRain < 0.999 || uMorph < 0.999) {
+  // ---- Four-beat entrance show (matches the reference video) ----
+  // 1) uRain:    a staggered curtain falls from above the screen.
+  // 2) uHeart:   the falling cloud condenses into a big glowing heart.
+  // 3) uCluster: the heart collapses into a bud at the tree tip.
+  // 4) uGrow:    the bud blooms downward into the finished tree, guided by a
+  //              helix so the growth reads as a spiral ribbon unfurling.
+  // At the settled state (uRain=1,uHeart=0,uCluster=0,uGrow=1) nothing moves.
+  float heartRim=0.0;
+  if (uRain < 0.999 || uHeart > 0.001 || uCluster > 0.001 || uGrow < 0.999) {
     float h1=fract(sin(aPhase*12.9898)*43758.5453);
     float h2=fract(sin(aPhase*78.233)*24634.6345);
     float h3=fract(sin(aPhase*45.164)*12543.123);
-    // Slightly different start delays make a staggered curtain of rain rather
-    // than one solid sheet; each drop accelerates under gravity.
+    // Falling curtain: staggered delays + gravity acceleration. Particles land
+    // in a loose cloud roughly where the heart will be, with the floor mist as
+    // a faint accumulation at the very bottom.
     float delay=h1*0.40;
     float lp=clamp((uRain-delay)/(1.0-delay),0.0,1.0);
     float fall=lp*lp;
-    float startY=-0.46-h2*0.30;                 // above the top of the screen
-    float pileY=1.02+h3*0.085;                  // along the bottom of the screen
-    vec2 pile=vec2(x+(h2-0.5)*0.04, mix(startY,pileY,fall));
-    float m=uMorph*uMorph*(3.0-2.0*uMorph);
-    vec2 base=mix(pile,vec2(x,y),m);
-    float spin=sin(m*3.14159265)*6.2831853*(0.9+h1*0.5);
-    vec2 center=vec2(0.0,0.46);
-    vec2 rel=base-center;
-    vec2 spun=center+vec2(rel.x*cos(spin)-rel.y*sin(spin),rel.x*sin(spin)+rel.y*cos(spin));
-    x=spun.x; y=spun.y;
-    brightness *= 1.0 + (1.0-m)*0.45 + sin(m*3.14159265)*0.55;
+    float startY=-0.46-h2*0.30;
+    float cloudY=0.30+h3*0.16+(h2-0.5)*0.22;
+    vec2 cloud=vec2((h2-0.5)*0.10+(h3-0.5)*0.06, mix(startY,cloudY,fall));
+
+    // Heart: a large camera-facing heart centred a little above the middle.
+    vec2 hp=heartPoint(aPhase,heartRim);
+    vec2 heart=vec2(hp.x*0.40, 0.42-hp.y*0.30);
+    vec2 pos=mix(cloud,heart,smoothstep(0.0,1.0,uHeart));
+
+    // Bud: collapse the heart into a tight glowing cluster at the tree tip.
+    float bh=fract(sin(aPhase*91.7)*24631.7);
+    vec2 bud=vec2((h1-0.5)*0.045, -0.055+(h2-0.5)*0.035+bh*0.012);
+    pos=mix(pos,bud,smoothstep(0.0,1.0,uCluster));
+
+    // Grow: each particle waits until the bloom front reaches its height, so
+    // the tree opens from the top down. A per-particle angular swirl makes the
+    // front trace a helix rather than a flat horizontal slice.
+    float g=uGrow*uGrow*(3.0-2.0*uGrow);
+    float height=p.y;                       // 0 at tip, 1 at the base
+    float front=g*1.42-0.12;                // leading edge of the bloom
+    float local=clamp((front-height)/(0.30),0.0,1.0);
+    local=local*local*(3.0-2.0*local);
+    float spin=aPhase+height*13.0+g*6.2831853;
+    vec2 swirl=vec2(cos(spin),sin(spin))*(1.0-local)*0.035*(0.4+height);
+    vec2 treeTarget=vec2(x,y);
+    pos=mix(pos,treeTarget+swirl,local);
+
+    x=pos.x; y=pos.y;
+    float heartShine=smoothstep(0.0,1.0,uHeart)*(1.0-smoothstep(0.0,1.0,uCluster));
+    brightness *= 1.0 + (1.0-g)*0.35 + heartShine*(heartRim>0.5?1.35:0.45)
+                + sin(local*3.14159265)*0.5;
   }
   vec2 screen=(uOrigin+uScale*vec2(x,y))/uViewport;
   gl_Position=vec4(screen.x*2.0-1.0,1.0-screen.y*2.0,0.0,1.0);
   gl_PointSize=max(1.7*uRatio,aSize*uScale*uRatio*(2.65+2.9*crown)*(0.45+0.55*uIntro)*(1.0+uGather*0.3));
-  vColor=mix(aColor,vec3(1.0),crown*0.78);
-  vBrightness=brightness*shimmer*(1.0+0.87*crown);
+  vColor=mix(aColor,vec3(1.0,.88,.96),crown*0.34);
+  vBrightness=brightness*shimmer*(1.0+0.42*crown);
 }`;
 const fragmentSource = `
 precision mediump float;
@@ -330,15 +369,15 @@ function createGPU(canvas, cloud) {
     const loc=gl.getAttribLocation(program,name);
     gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,components,gl.FLOAT,false,STRIDE*4,offset*4);
   }
-  const [viewport,origin,rotation,scale,ratio,time,pulse,intro,gather,scatter,rain,morph] = ['uViewport','uOrigin','uRotation','uScale','uRatio','uTime','uPulse','uIntro','uGather','uScatter','uRain','uMorph'].map(n=>gl.getUniformLocation(program,n));
+  const [viewport,origin,rotation,scale,ratio,time,pulse,intro,gather,scatter,rain,heart,cluster,grow] = ['uViewport','uOrigin','uRotation','uScale','uRatio','uTime','uPulse','uIntro','uGather','uScatter','uRain','uHeart','uCluster','uGrow'].map(n=>gl.getUniformLocation(program,n));
   gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.clearColor(0,0,0,0);
   return {
-    draw(view, sn, cs, t, pulseValue, introValue, gatherValue = 0, scatterValue = 0, rainValue = 1, morphValue = 1) {
+    draw(view, sn, cs, t, pulseValue, introValue, st) {
       gl.viewport(0,0,canvas.width,canvas.height); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2f(viewport,view.w,view.h); gl.uniform2f(origin,view.x,view.y);
       gl.uniform2f(rotation,sn,cs); gl.uniform1f(scale,view.s); gl.uniform1f(ratio,view.dpr);
-      gl.uniform1f(time,t); gl.uniform1f(pulse,pulseValue); gl.uniform1f(intro,introValue); gl.uniform1f(gather,gatherValue); gl.uniform1f(scatter,scatterValue);
-      gl.uniform1f(rain,rainValue); gl.uniform1f(morph,morphValue);
+      gl.uniform1f(time,t); gl.uniform1f(pulse,pulseValue); gl.uniform1f(intro,introValue); gl.uniform1f(gather,st.gather); gl.uniform1f(scatter,st.scatter);
+      gl.uniform1f(rain,st.rain); gl.uniform1f(heart,st.heart); gl.uniform1f(cluster,st.cluster); gl.uniform1f(grow,st.grow);
       gl.drawArrays(gl.POINTS,0,cloud.length/STRIDE);
     },
     destroy() { gl.deleteBuffer(buffer); gl.deleteProgram(program); }
@@ -347,13 +386,13 @@ function createGPU(canvas, cloud) {
 
 // Reduced point count with prepainted radial sprites keeps the same shape on devices without WebGL.
 function makeFallback(cloud) {
-  const festiveRGB=[[1,.28,.34],[1,.78,.26],[.34,1,.55],[1,.45,.72],[.42,.78,1]];
+  const festiveRGB=[[1,.42,.66],[1,.72,.44],[.92,.48,.86],[1,.58,.78],[.98,.80,.52]];
   const sprites = Array.from({length:21},(_,i)=>{
     const canvas=document.createElement('canvas'); canvas.width=canvas.height=16;
     const c=canvas.getContext('2d');
     const t=i/12;
     const rgb=i>=16 ? festiveRGB[i-16].map(v=>Math.round(v*255))
-      : i>=13 ? [255,153+(i-13)*37,206+(i-13)*19] : [Math.floor(71+184*t),Math.floor(131+124*t),255];
+      : i>=13 ? [255,153+(i-13)*37,206+(i-13)*19] : [Math.floor(118+137*t),Math.floor(26+174*t),Math.floor(82+160*t)];
     const gradient=c.createRadialGradient(8,8,0,8,8,8);
     for(const [at,alpha] of [[0,1],[.3,.74],[.65,.18],[1,0]]) gradient.addColorStop(at,'rgba('+rgb.join(',')+','+alpha+')');
     c.fillStyle=gradient;c.fillRect(0,0,16,16);
@@ -375,7 +414,18 @@ function makeFallback(cloud) {
     return {x:Math.cos(theta)*r*rad, y:z*rad};
   };
   const fract=x=>x-Math.floor(x);
-  return (c,view,sn,cs,t,pulseValue=0,introValue=1,gatherValue=0,scatterValue=0,rainValue=1,morphValue=1)=>{
+  const smooth=e=>e*e*(3-2*e);
+  const heartJS=(phase)=>{
+    const th=fract(phase*0.15915494)*Math.PI*2;
+    const hx=Math.sin(th)**3;
+    const hy=(13*Math.cos(th)-5*Math.cos(2*th)-2*Math.cos(3*th)-Math.cos(4*th))/16;
+    const edge=fract(Math.sin(phase*44.113)*9157.31)>=0.62?1:0;
+    const interior=Math.sqrt(fract(Math.sin(phase*27.71)*5731.17));
+    const f=edge?1:interior*0.92;
+    return {x:hx*f,y:hy*f,rim:edge};
+  };
+  return (c,view,sn,cs,t,pulseValue=0,introValue=1,st)=>{
+    const {gather:gatherValue=0,scatter:scatterValue=0,rain:rainValue=1,heart:heartValue=0,cluster:clusterValue=0,grow:growValue=1}=st;
     c.globalCompositeOperation='lighter';
     for(const p of points) {
       let x=p.x*cs+p.z*sn;
@@ -410,22 +460,34 @@ function makeFallback(cloud) {
         x=x+(dx-x)*scatterValue; y=y+(dy-y)*scatterValue;
         a*=1+scatterValue*.35;
       }
-      if (rainValue < 0.999 || morphValue < 0.999) {
+      if (rainValue < 0.999 || heartValue > 0.001 || clusterValue > 0.001 || growValue < 0.999) {
         const h1=fract(Math.sin(p.phase*12.9898)*43758.5453);
         const h2=fract(Math.sin(p.phase*78.233)*24634.6345);
         const h3=fract(Math.sin(p.phase*45.164)*12543.123);
         const delay=h1*0.40;
         const lp=Math.min(1,Math.max(0,(rainValue-delay)/(1-delay)));
         const fall=lp*lp;
-        const startY=-0.46-h2*0.30, pileY=1.02+h3*0.085;
-        const pileX=x+(h2-0.5)*0.04, pileYPos=startY+(pileY-startY)*fall;
-        const m=morphValue*morphValue*(3-2*morphValue);
-        const bx=pileX+(x-pileX)*m, by=pileYPos+(y-pileYPos)*m;
-        const spin=Math.sin(m*Math.PI)*Math.PI*2*(0.9+h1*0.5);
-        const rx=bx-0, ry=by-0.46;
-        x=rx*Math.cos(spin)-ry*Math.sin(spin);
-        y=0.46+rx*Math.sin(spin)+ry*Math.cos(spin);
-        a*=1+(1-m)*0.45+Math.sin(m*Math.PI)*0.55;
+        const startY=-0.46-h2*0.30;
+        const cloudY=0.30+h3*0.16+(h2-0.5)*0.22;
+        let px=(h2-0.5)*0.10+(h3-0.5)*0.06, py=startY+(cloudY-startY)*fall;
+        const hp=heartJS(p.phase);
+        const hx=hp.x*0.40, hy=0.42-hp.y*0.30;
+        const hm=smooth(heartValue);
+        px=px+(hx-px)*hm; py=py+(hy-py)*hm;
+        const bh=fract(Math.sin(p.phase*91.7)*24631.7);
+        const bx0=(h1-0.5)*0.045, by0=-0.055+(h2-0.5)*0.035+bh*0.012;
+        const cm=smooth(clusterValue);
+        px=px+(bx0-px)*cm; py=py+(by0-py)*cm;
+        const g=smooth(growValue), height=p.y;
+        const front=g*1.42-0.12;
+        let local=Math.min(1,Math.max(0,(front-height)/0.30));
+        local=smooth(local);
+        const spin=p.phase+height*13.0+g*6.2831853;
+        const sx=Math.cos(spin)*(1-local)*0.035*(0.4+height);
+        const sy=Math.sin(spin)*(1-local)*0.035*(0.4+height);
+        x=px+((x+sx)-px)*local; y=py+((y+sy)-py)*local;
+        const heartShine=smooth(heartValue)*(1-smooth(clusterValue));
+        a*=1+(1-g)*0.35+heartShine*(hp.rim?1.35:0.45)+Math.sin(local*Math.PI)*0.5;
       }
       const crown=p.kind===0?Math.max(0,1-p.y/.7):0;
       const r=Math.max(1.1,p.s*view.s*(1.95+crown*.90)*(1+gatherValue*0.3));
@@ -460,6 +522,110 @@ function makeHeartGlow() {
   return sprite;
 }
 
+// A few bright meteors streak across the upper sky during the opening rain.
+function drawMeteors(ctx, view, elapsed, alpha){
+  if(alpha<=0.004||elapsed>3400)return;
+  const t=elapsed/1000;
+  const lanes=[[0.10,1.5,0.15],[0.04,1.1,0.55],[0.02,1.3,0.95]];
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  for(let i=0;i<lanes.length;i++){
+    const [x0,dur,delay]=lanes[i];
+    const p=(t-delay)/dur;
+    if(p<0||p>1.18)continue;
+    const prog=Math.min(1,p), fade=Math.min(1,(1.18-p)/0.18);
+    const sx=x0*view.w, sy=-view.h*0.06;
+    const hx=sx+view.w*0.30*prog, hy=sy+view.h*0.30*prog;
+    const tail=view.w*0.15;
+    const grad=ctx.createLinearGradient(hx-tail*0.87,hy-tail*0.5,hx,hy);
+    grad.addColorStop(0,'rgba(255,235,210,0)');
+    grad.addColorStop(1,'rgba(255,248,232,'+(0.85*alpha*fade)+')');
+    ctx.strokeStyle=grad;ctx.lineWidth=2.1;
+    ctx.beginPath();ctx.moveTo(hx-tail*0.87,hy-tail*0.5);ctx.lineTo(hx,hy);ctx.stroke();
+    ctx.fillStyle='rgba(255,252,240,'+(alpha*fade)+')';
+    ctx.beginPath();ctx.arc(hx,hy,1.9,0,TAU);ctx.fill();
+  }
+  ctx.restore();
+}
+
+// A radiant four-point star that crowns the finished tree.
+function drawTipStar(ctx, view, ox, alpha, t){
+  if(alpha<=0.004)return;
+  const cx=ox, cy=view.y+view.s*0.005;
+  const pulse=0.86+0.14*Math.sin(t*2.1);
+  const R=view.s*0.052*pulse;
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,R*3.4);
+  g.addColorStop(0,'rgba(255,255,255,'+(0.8*alpha)+')');
+  g.addColorStop(0.22,'rgba(255,226,246,'+(0.34*alpha)+')');
+  g.addColorStop(1,'rgba(255,170,220,0)');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,R*3.4,0,TAU);ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,'+(0.9*alpha)+')';
+  ctx.lineWidth=Math.max(1,view.s*0.0021);
+  ctx.beginPath();ctx.moveTo(cx-R*2.5,cy);ctx.lineTo(cx+R*2.5,cy);
+  ctx.moveTo(cx,cy-R*2.5);ctx.lineTo(cx,cy+R*2.5);ctx.stroke();
+  ctx.lineWidth=Math.max(0.8,view.s*0.0012);
+  ctx.beginPath();ctx.moveTo(cx-R*1.15,cy-R*1.15);ctx.lineTo(cx+R*1.15,cy+R*1.15);
+  ctx.moveTo(cx-R*1.15,cy+R*1.15);ctx.lineTo(cx+R*1.15,cy-R*1.15);ctx.stroke();
+  ctx.restore();
+}
+
+// Script lettering under the tree, once the show has settled.
+function drawMerry(ctx, view, ox, alpha){
+  if(alpha<=0.004)return;
+  const size=Math.max(17,view.s*0.068);
+  ctx.save();ctx.globalAlpha=alpha;ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font='italic '+size+'px "Segoe Script","Brush Script MT","Snell Roundhand",Georgia,serif';
+  ctx.shadowColor='rgba(255,168,216,.9)';ctx.shadowBlur=size*0.55;
+  ctx.fillStyle='rgba(255,240,249,.97)';
+  ctx.fillText('Merry Christmas',ox,view.y+view.s*1.055);
+  ctx.shadowBlur=0;ctx.restore();
+}
+
+// Golden fireworks that bloom in the sky to the right of the finished tree.
+function makeFireworks(){
+  let bursts=[], nextAt=0, seed=77612;
+  const rnd=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+  function spawn(view,ox,t){
+    const count=54+Math.floor(rnd()*30);
+    const cx=ox+view.s*(0.26+rnd()*0.24);
+    const cy=view.y+view.s*(0.02+rnd()*0.24);
+    const ring=rnd()<0.55, parts=[];
+    for(let i=0;i<count;i++){
+      const a=ring?(i/count)*TAU+rnd()*0.05:rnd()*TAU;
+      const sp=ring?(0.9+rnd()*0.12):(0.3+rnd()*0.72);
+      parts.push({a,sp,size:0.7+rnd()*1.7,tw:rnd()*TAU,delay:rnd()*0.10});
+    }
+    bursts.push({cx,cy,t0:t,parts,life:1.5+rnd()*0.7});
+  }
+  return {
+    reset(){bursts=[];nextAt=0},
+    draw(ctx,view,ox,t,active){
+      if(!active){bursts=[];nextAt=0;return}
+      if(t>nextAt){spawn(view,ox,t);nextAt=t+1.15+rnd()*1.5}
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      for(let bi=bursts.length-1;bi>=0;bi--){
+        const b=bursts[bi], age=t-b.t0;
+        if(age>b.life){bursts.splice(bi,1);continue}
+        const prog=age/b.life, expand=(1-Math.pow(1-prog,2))*view.s*0.17;
+        for(const q of b.parts){
+          const aa=age-q.delay;if(aa<0)continue;
+          const d=expand*q.sp;
+          const gx=b.cx+Math.cos(q.a)*d;
+          const gy=b.cy+Math.sin(q.a)*d+aa*aa*view.s*0.034;
+          const twinkle=0.6+0.4*Math.sin(t*12+q.tw);
+          const fade=Math.max(0,1-prog)*twinkle;
+          const r=q.size*(1-prog*0.45);
+          ctx.globalAlpha=Math.min(1,fade*0.9);
+          ctx.fillStyle='#ffd98a';ctx.beginPath();ctx.arc(gx,gy,r,0,TAU);ctx.fill();
+          ctx.globalAlpha=Math.min(1,fade*0.22);
+          ctx.beginPath();ctx.arc(gx,gy,r*3.2,0,TAU);ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  };
+}
+
 // A soft pool of light under the tree, painted on the foreground canvas.
 function makeGroundGlow() {
   const sprite=document.createElement('canvas');
@@ -468,10 +634,10 @@ function makeGroundGlow() {
   c.save();
   c.translate(128,48); c.scale(1,0.375); c.translate(-128,-128);
   const glow=c.createRadialGradient(128,128,0,128,128,128);
-  glow.addColorStop(0,'rgba(150,190,255,.30)');
-  glow.addColorStop(.35,'rgba(120,165,245,.20)');
+  glow.addColorStop(0,'rgba(236,130,196,.32)');
+  glow.addColorStop(.35,'rgba(198,92,178,.22)');
   glow.addColorStop(.62,'rgba(255,205,130,.10)');
-  glow.addColorStop(1,'rgba(120,150,220,0)');
+  glow.addColorStop(1,'rgba(140,70,150,0)');
   c.fillStyle=glow; c.fillRect(0,0,256,256);
   c.restore();
   return sprite;
@@ -530,6 +696,7 @@ export function createTree(canvas,{onSelect}={}) {
   stage.setAttribute('aria-hidden','true');
   stage.style.cssText='position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none';
   const cloud=makeCloud(), heartGlow=makeHeartGlow(), groundGlow=makeGroundGlow();
+  const fireworks=makeFireworks();
   let gpu=null, fallback=null;
   function useGPU() {
     try { gpu=createGPU(stage,cloud); } catch { gpu=null; }
@@ -545,12 +712,16 @@ export function createTree(canvas,{onSelect}={}) {
   let pulseValue=0, startedAt=0, parallax=0, parallaxTarget=0;
   let gatherValue=0, gatherTarget=0;
   let scatterValue=0, scatterTarget=0, scatterDirs=[];
-  // Rain-drop entrance show, driven by an absolute start time so it survives
-  // frame-rate changes. rainValue 0..1 falls from the top, morphValue 0..1
-  // spirals the pile into the tree. Before playRainEntrance() they sit at 1
-  // (no show), which is also the settled state after the show finishes.
-  let entranceStart=null, rainValue=1, morphValue=1, ornamentFade=1;
-  const RAIN_MS=1600, HOLD_MS=1400, MORPH_MS=1900;
+  // Four-beat entrance show, driven by an absolute start time so it survives
+  // frame-rate changes. Each value is 0..1. Settled state (no show, and after
+  // the show) is rain=1, heart=0, cluster=0, grow=1: a plain finished tree.
+  let entranceStart=null, rainValue=1, heartValue=0, clusterValue=0, growValue=1, ornamentFade=1;
+  // Timeline mirrors the reference video: a falling curtain, a heart that
+  // lingers, a collapse to the tip, then a top-down bloom into the tree.
+  // Optional ?slow=4 query parameter stretches the whole show for inspection.
+  const slowFactor=(()=>{try{const v=parseFloat(new URLSearchParams(location.search).get('slow'));return v>=1&&v<=20?v:1}catch{return 1}})();
+  const RAIN_MS=2000*slowFactor, HEART_IN_MS=1800*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=900*slowFactor, GROW_MS=2600*slowFactor;
+  const ENTRANCE_MS=RAIN_MS+HEART_IN_MS+HEART_HOLD_MS+CLUSTER_MS+GROW_MS;
   const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)');
   function resize() {
     const {width:w,height:h}=canvas.getBoundingClientRect();
@@ -631,19 +802,22 @@ export function createTree(canvas,{onSelect}={}) {
     const intro = reducedMotion?.matches ? 1 : Math.min(1, (now - startedAt) / 1400);
     const easedIntro = 1 - Math.pow(1 - intro, 3);
     pulseValue *= Math.exp(-2.6 * dt);
-    // Entrance timeline: rain 0..1 over RAIN_MS, a short hold, then the whole
-    // pile screws into the tree over MORPH_MS. Ornaments fade in only once the
-    // tree has essentially formed. Reduced motion skips straight to settled.
+    // Entrance timeline: falling curtain -> heart -> bud -> top-down bloom.
+    // Ornaments fade in only once the tree has essentially formed. Reduced
+    // motion skips straight to the settled tree.
     if (entranceStart !== null) {
       const e = now - entranceStart;
-      if (reducedMotion?.matches || e >= RAIN_MS + HOLD_MS + MORPH_MS) {
-        rainValue = 1; morphValue = 1; ornamentFade = 1; entranceStart = null;
+      if (reducedMotion?.matches || e >= ENTRANCE_MS) {
+        rainValue = 1; heartValue = 0; clusterValue = 0; growValue = 1; ornamentFade = 1; entranceStart = null;
       } else {
+        const tHeart = RAIN_MS, tCluster = tHeart + HEART_IN_MS + HEART_HOLD_MS, tGrow = tCluster + CLUSTER_MS;
         rainValue = Math.min(1, e / RAIN_MS);
-        morphValue = e <= RAIN_MS + HOLD_MS ? 0 : (e - RAIN_MS - HOLD_MS) / MORPH_MS;
-        const form = (e - RAIN_MS - HOLD_MS) / MORPH_MS;
-        ornamentFade = form <= 0.45 ? 0 : Math.min(1, (form - 0.45) / 0.5);
-        if (e > RAIN_MS && e < RAIN_MS + HOLD_MS + MORPH_MS && pulseValue < 0.12) pulseValue = 0.12;
+        heartValue = e < tHeart ? 0 : e < tHeart + HEART_IN_MS ? (e - tHeart) / HEART_IN_MS : 1;
+        clusterValue = e < tCluster ? 0 : e < tGrow ? (e - tCluster) / CLUSTER_MS : 1;
+        growValue = e < tGrow ? 0 : Math.min(1, (e - tGrow) / GROW_MS);
+        const form = (e - tGrow) / GROW_MS;
+        ornamentFade = form <= 0.35 ? 0 : Math.min(1, (form - 0.35) / 0.5);
+        if (e > tHeart && e < tGrow && pulseValue < 0.12) pulseValue = 0.12;
       }
     }
     // Gathering is deliberately slow (about 2-3 s to a full ball) so a
@@ -670,28 +844,45 @@ export function createTree(canvas,{onSelect}={}) {
     ctx.setTransform(view.dpr,0,0,view.dpr,0,0);
     ctx.clearRect(0,0,view.w,view.h);
     const shiftedView = {...view, x: originX};
-    if(gpu) gpu.draw(shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue,rainValue,morphValue);
-    else fallback(ctx,shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue,rainValue,morphValue);
-    const glowSize=view.s*(.236+.004*Math.sin(animationTime*1.8))*(1+pulseValue*.35);
-    ctx.globalAlpha=(1-scatterValue*.85)*ornamentFade;
-    ctx.drawImage(heartGlow,originX-glowSize*.5,view.y-view.s*.06-glowSize*.5,glowSize,glowSize);
+    const entrance={gather:gatherValue,scatter:scatterValue,rain:rainValue,heart:heartValue,cluster:clusterValue,grow:growValue};
+    if(gpu) gpu.draw(shiftedView,sn,cs,animationTime,pulseValue,easedIntro,entrance);
+    else fallback(ctx,shiftedView,sn,cs,animationTime,pulseValue,easedIntro,entrance);
+    // The pink heart halo belongs to the heart beat; the ground glow belongs
+    // to the finished tree. Cross-fade them so neither floats at the wrong time.
+    const heartPhase=Math.max(0,Math.min(1,heartValue*(1-clusterValue)))*(1-scatterValue*.85);
+    if(heartPhase>0.004){
+      const glowSize=view.s*(.66+.02*Math.sin(animationTime*2.2))*(1+pulseValue*.2);
+      ctx.globalAlpha=heartPhase;
+      ctx.drawImage(heartGlow,originX-glowSize*.5,view.y+view.s*.42-glowSize*.5,glowSize,glowSize);
+    }
     const groundW=view.s*1.06, groundH=view.s*.20;
+    ctx.globalAlpha=(1-scatterValue*.85)*ornamentFade;
     ctx.drawImage(groundGlow,originX-groundW*.5,view.y+view.s*1.01-groundH*.5,groundW,groundH);
     ctx.globalAlpha=1;
     drawGifts(ctx,{...view,x:originX},sn,Math.max(gatherValue,scatterValue,1-ornamentFade));
     drawPhotos(sn,cs,originX,Math.max(gatherValue,1-ornamentFade),scatterValue);
+    // Foreground flourishes from the reference video.
+    const elapsed=entranceStart!==null?(now-entranceStart):Infinity;
+    if(!reducedMotion?.matches) drawMeteors(ctx,view,elapsed,(1-scatterValue)*(1-gatherValue));
+    const settled=ornamentFade;
+    drawTipStar(ctx,view,originX,settled*(1-scatterValue*.6),animationTime);
+    drawMerry(ctx,view,originX,settled*(1-scatterValue*.85));
+    if(!reducedMotion?.matches){
+      fireworks.draw(ctx,view,originX,animationTime,settled>0.9&&scatterValue<0.25&&gatherValue<0.25);
+    }
   }
 
   function pulse(strength=1) { pulseValue = Math.max(pulseValue, Math.min(1, strength)); }
 
-  // Start the rain-drop entrance show: particles fall from the top, pile up
-  // at the bottom, then spiral into the tree after a short hold. Any prior
-  // gather/scatter state is cleared so the show runs from a clean tree shape.
+  // Start the four-beat entrance show: falling curtain -> heart -> bud at the
+  // tip -> top-down bloom into the tree. Any prior gather/scatter state is
+  // cleared so the show runs from a clean tree shape.
   function playRainEntrance() {
     if (!startedAt) startedAt = performance.now();
     gatherTarget = 0; scatterTarget = 0;
     gatherValue = 0; scatterValue = 0;
-    rainValue = 0; morphValue = 0; ornamentFade = 0;
+    rainValue = 0; heartValue = 0; clusterValue = 0; growValue = 0; ornamentFade = 0;
+    fireworks.reset();
     entranceStart = performance.now();
   }
 
