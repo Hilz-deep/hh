@@ -68,3 +68,46 @@ dialog{background:#11141e;border-color:#5c584f}
 #viewer.closing::backdrop{animation:backdrop-out .24s ease-in forwards}
 @keyframes backdrop-out{from{opacity:1}to{opacity:0}}
 @media(prefers-reduced-motion:reduce){#viewer.closing::backdrop{animation:none}}
+
+/* Opening curtain: a quiet snowfall that parts to reveal the lit tree. */
+.intro{position:fixed;inset:0;z-index:60;display:grid;place-items:center;overflow:hidden;padding:24px;text-align:center;
+  background:radial-gradient(ellipse at 50% 40%,#162a3494 0%,#0a1018e8 55%,#05070ce8 100%);
+  backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);opacity:1;transition:opacity .95s cubic-bezier(.4,0,.2,1)}
+.intro.leaving{opacity:0;pointer-events:none}
+.intro[hidden]{display:none}
+.intro-halo{position:absolute;left:50%;top:47%;width:min(120vw,900px);height:min(120vw,900px);transform:translate(-50%,-50%);pointer-events:none;
+  background:radial-gradient(circle,rgba(255,214,150,.16) 0%,rgba(139,196,255,.07) 38%,transparent 66%);
+  animation:intro-breathe 6s ease-in-out infinite}
+@keyframes intro-breathe{0%,100%{transform:translate(-50%,-50%) scale(.94);opacity:.75}50%{transform:translate(-50%,-50%) scale(1.06);opacity:1}}
+.intro-snow{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.intro-snow i{position:absolute;top:-8%;display:block;border-radius:50%;background:#eaf3ff;box-shadow:0 0 8px 1px rgba(210,232,255,.6);
+  animation:intro-fall linear infinite;opacity:.75}
+@keyframes intro-fall{0%{transform:translate3d(0,-10vh,0);opacity:0}10%{opacity:.8}90%{opacity:.8}100%{transform:translate3d(28px,112vh,0);opacity:0}}
+.intro-card{position:relative;z-index:1;max-width:640px;display:flex;flex-direction:column;align-items:center;gap:0}
+.intro-kicker{margin:0 0 26px;font:600 11px/1.4 Georgia,serif;letter-spacing:.42em;color:#c9b98f;
+  opacity:0;animation:intro-rise .9s .15s cubic-bezier(.22,1,.36,1) forwards}
+.intro-mark{font:34px/1 Georgia,serif;color:#ffe0a6;text-shadow:0 0 26px rgba(255,214,150,.85);margin-bottom:12px;
+  opacity:0;animation:intro-pop 1s .3s cubic-bezier(.22,1,.36,1) forwards}
+.intro-title{margin:0;font:400 clamp(30px,6.4vw,58px)/1.28 Georgia,"PingFang SC","Microsoft YaHei",serif;letter-spacing:.02em;color:#f7efdd;
+  text-shadow:0 2px 30px rgba(180,214,255,.25);opacity:0;animation:intro-rise 1.05s .42s cubic-bezier(.22,1,.36,1) forwards}
+.intro-sub{margin:20px 0 34px;max-width:30em;font-size:clamp(13px,2.6vw,15px);line-height:1.8;color:#b9c4cb;letter-spacing:.06em;
+  opacity:0;animation:intro-rise 1.05s .6s cubic-bezier(.22,1,.36,1) forwards}
+.intro-enter{min-height:50px;padding:13px 30px;border-radius:10px;font-size:15px;font-weight:650;letter-spacing:.08em;
+  color:#2a2a24;background:linear-gradient(180deg,#f6e4bc,#e3c892);border:1px solid #fff0cf;
+  box-shadow:0 8px 34px rgba(226,197,140,.28),inset 0 1px 0 rgba(255,255,255,.6);
+  opacity:0;animation:intro-rise 1.05s .78s cubic-bezier(.22,1,.36,1) forwards;transition:transform .2s ease,box-shadow .2s ease}
+.intro-enter:hover{transform:translateY(-2px);box-shadow:0 12px 42px rgba(226,197,140,.42),inset 0 1px 0 rgba(255,255,255,.6)}
+.intro-enter:active{transform:translateY(0)}
+.intro-enter svg{transition:transform .2s ease}
+.intro-enter:hover svg{transform:translateX(3px)}
+.intro-hint{margin:22px 0 0;font-size:12px;color:#8f9aa2;letter-spacing:.14em;
+  opacity:0;animation:intro-rise 1.05s 1s cubic-bezier(.22,1,.36,1) forwards}
+@keyframes intro-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:translateY(0)}}
+@keyframes intro-pop{from{opacity:0;transform:scale(.4) rotate(-40deg)}to{opacity:1;transform:scale(1) rotate(0)}}
+@media(max-width:740px){.intro{padding:20px}.intro-kicker{margin-bottom:18px;letter-spacing:.28em;font-size:10px}.intro-sub{margin:16px 0 28px}.intro-mark{font-size:28px}}
+@media(prefers-reduced-motion:reduce){
+  .intro{transition:opacity .2s linear}
+  .intro-halo,.intro-snow i,.intro-kicker,.intro-mark,.intro-title,.intro-sub,.intro-enter,.intro-hint{animation:none}
+  .intro-snow{display:none}
+  .intro-kicker,.intro-mark,.intro-title,.intro-sub,.intro-enter,.intro-hint{opacity:1}
+}

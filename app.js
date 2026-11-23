@@ -115,6 +115,51 @@ viewer.addEventListener('cancel',e=>{e.preventDefault();closeViewer()});
 for(const dialog of [viewer,guide])dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const box=dialog.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom){if(dialog===viewer)closeViewer();else dialog.close()}});
 drawLandscape(el('landscape'));
 const tree=createTree(el('tree'),{onSelect:showPhoto});
+
+// Opening curtain. The tree waits as a gathered ball of light; entering
+// parts the curtain and lets the particles unfurl into the tree.
+(function opening(){
+  const intro=el('intro');
+  if(!intro) return;
+  if(!reducedMotion){
+    const frag=document.createDocumentFragment();
+    for(let i=0;i<46;i++){
+      const flake=document.createElement('i');
+      const size=2+Math.random()*3.4;
+      flake.style.width=size+'px';flake.style.height=size+'px';
+      flake.style.left=(Math.random()*100)+'%';
+      flake.style.animationDuration=(7+Math.random()*9)+'s';
+      flake.style.animationDelay=(-Math.random()*12)+'s';
+      flake.style.opacity=(.35+Math.random()*.5);
+      frag.append(flake);
+    }
+    el('introSnow').replaceChildren(frag);
+  }
+  tree.setGather(true);
+  el('introEnter').focus({preventScroll:true});
+  let entered=false;
+  function enter(){
+    if(entered) return;
+    entered=true;
+    window.removeEventListener('keydown',onKey,true);
+    if(reducedMotion){intro.hidden=true;tree.setGather(false);tree.pulse(.6);return}
+    intro.classList.add('leaving');
+    tree.setGather(false);
+    tree.pulse(1);
+    setTimeout(()=>{
+      intro.hidden=true;
+      try{el('tree').focus({preventScroll:true})}catch{}
+    },980);
+  }
+  function onKey(e){
+    if(entered) return;
+    if(e.key==='Enter'||e.key===' '||e.key==='Spacebar'){e.preventDefault();enter()}
+  }
+  el('introEnter').addEventListener('click',e=>{e.stopPropagation();enter()});
+  intro.addEventListener('click',enter);
+  window.addEventListener('keydown',onKey,true);
+})();
+
 function gallery(){
   const fragment=document.createDocumentFragment();
   photos.forEach((p,i)=>{
