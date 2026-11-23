@@ -785,7 +785,7 @@ export function createTree(canvas,{onSelect}={}) {
   // lingers, a collapse to the tip, then a top-down bloom into the tree.
   // Optional ?slow=4 query parameter stretches the whole show for inspection.
   const slowFactor=(()=>{try{const v=parseFloat(new URLSearchParams(location.search).get('slow'));return v>=1&&v<=20?v:1}catch{return 1}})();
-  const RAIN_MS=3000*slowFactor, HEART_IN_MS=1800*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=900*slowFactor, GROW_MS=2600*slowFactor;
+  const RAIN_MS=5000*slowFactor, HEART_IN_MS=1800*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=900*slowFactor, GROW_MS=4500*slowFactor;
   const ENTRANCE_MS=RAIN_MS+HEART_IN_MS+HEART_HOLD_MS+CLUSTER_MS+GROW_MS;
   const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)');
   function resize() {
