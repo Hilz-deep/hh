@@ -291,35 +291,38 @@ void main() {
     float h3=fract(sin(aPhase*45.164)*12543.123);
     float h4=fract(sin(aPhase*34.771)*6217.317);
     float h5=fract(sin(aPhase*57.913)*3719.541);
-    // Falling light streaks: most particles fall inside a handful of vertical
-    // CURTAINS (uneven density, like the reference), the rest are loose stray
-    // stars. Each drop owns its start height, speed, delay and a vertical
-    // trail length. The trail itself is drawn by repeating the scene with
-    // uStreak sweeping 0->1; here we only place the head and fade the tail.
-    float delay=h1*0.72;                                    // staggered start
+    float h6=fract(sin(aPhase*71.239)*9341.773);
+    // Falling light streaks: distinct, well-separated grains drifting down on
+    // slanted paths at uneven heights. Each drop owns its lane, start height,
+    // landing height, speed, delay, slant and a short trail. Widely scattered
+    // landing heights + slanted drift + big delay spread kill the flat, ordered
+    // look; only a fraction of grains are visible (see show mask below) so the
+    // points stay crisp instead of fusing into white clumps.
+    float delay=h1*0.85;                                    // big stagger
     float lp=clamp((uRain-delay)/(1.0-delay),0.0,1.0);
-    float pace=0.55+h5*0.9;                                 // per-drop speed
+    float pace=0.42+h5*1.25;                                // varied speed
     float fall=clamp(lp*pace,0.0,1.0);
     fall=fall*fall*(3.0-2.0*fall);                          // soft ease
-    float startY=-0.58-h4*0.40;                             // above the top edge
-    float cloudY=0.20+h3*0.58;                              // scattered landing
-    // Many thin curtains across the screen plus scattered strays -> an even
-    // but still unevenly-textured veil of falling light.
-    float curtain;
-    if (h4 < 0.72) {
-      float k=floor(h5*9.0);                                 // 0..8
-      float center=-1.20+k*0.30;                             // curtain centres
-      curtain=center+(h2-0.5)*0.13+(h1-0.5)*0.05;
+    float startY=-0.62-h6*0.62;                             // varied start height
+    float cloudY=0.04+h3*0.86;                              // varied landing height
+    // Uneven lanes with soft cores; a minority roam loose.
+    float lane;
+    if (h4 < 0.74) {
+      float k=floor(h5*8.0);                                 // 0..7
+      float center=-1.15+k*0.33;
+      lane=center+(h2-0.5)*0.30+(h1-0.5)*0.14;
     } else {
-      curtain=(h2-0.5)*2.6;                                  // loose strays
+      lane=(h2-0.5)*2.7;                                    // loose strays
     }
-    float sway=0.05*sin(uTime*0.8+aPhase*5.0+h4*6.2831)*(1.0-fall*0.5);
-    vec2 cloud=vec2(curtain+sway, mix(startY,cloudY,fall));
-    // Light-streak tail: uStreak walks from the bright head (0) upward along
-    // the fall path to a faded tail (1). Each drop has its own trail length.
-    float trailLen=(0.045+h3*0.11)*step(0.001,uRain)*step(uRain,0.999);
+    // Slanted fall: every grain drifts sideways by its own slope as it drops.
+    float slope=(h6-0.5)*1.25+0.12;                         // mostly slightly slanted
+    float drift=slope*fall*0.62;
+    float sway=0.035*sin(uTime*0.8+aPhase*5.0+h4*6.2831)*(1.0-fall*0.5);
+    vec2 cloud=vec2(lane+drift+sway, mix(startY,cloudY,fall));
+    // Short, faint trail so grains read as discrete points, not smeared blobs.
+    float trailLen=(0.022+h3*0.058)*step(0.001,uRain)*step(uRain,0.999);
     cloud.y += uStreak*trailLen;
-    brightness *= mix(1.0, 0.06, uStreak);
+    brightness *= mix(1.0, 0.02, uStreak);
 
     // Heart: a large camera-facing heart centred a little above the middle.
     vec2 hp=heartPoint(aPhase,heartRim);
@@ -351,14 +354,20 @@ void main() {
   }
   vec2 screen=(uOrigin+uScale*vec2(x,y))/uViewport;
   gl_Position=vec4(screen.x*2.0-1.0,1.0-screen.y*2.0,0.0,1.0);
-  gl_PointSize=max(1.7*uRatio,aSize*uScale*uRatio*(2.65+2.9*crown)*(0.45+0.55*uIntro)*(1.0+uGather*0.3));
   // During the rain beat the streaks read as cool white / silver starlight,
   // with only a minority keeping a pink-violet tint (see reference image).
   float rainBeat=step(uHeart,0.02)*(1.0-step(0.999,uRain));
-  float rarePink=step(0.86,fract(sin(aPhase*63.71)*2749.13));
-  vec3 rainColor=mix(vec3(0.90,0.94,1.0),vec3(1.0,0.62,0.84),rarePink*0.75);
+  // Keep only part of the grains during the rain so they stay distinct; fade
+  // the hidden ones back in as the heart condenses (full tree needs them all).
+  float keep=fract(sin(aPhase*53.117)*7411.97);
+  float show=mix(step(0.55,keep),1.0,smoothstep(0.0,0.35,uHeart));
+  // Shrink points during the rain so individual grains never fuse into blobs.
+  float rainSize=mix(1.0,0.58,rainBeat);
+  gl_PointSize=max(1.2*uRatio,aSize*uScale*uRatio*(2.65+2.9*crown)*(0.45+0.55*uIntro)*(1.0+uGather*0.3)*rainSize);
+  float rarePink=step(0.88,fract(sin(aPhase*63.71)*2749.13));
+  vec3 rainColor=mix(vec3(0.90,0.94,1.0),vec3(1.0,0.62,0.84),rarePink*0.7);
   vColor=mix(mix(aColor,vec3(1.0,.88,.96),crown*0.34),rainColor,rainBeat);
-  vBrightness=brightness*shimmer*(1.0+0.42*crown);
+  vBrightness=brightness*shimmer*(1.0+0.42*crown)*show;
 }`;
 const fragmentSource = `
 precision mediump float;
@@ -401,7 +410,7 @@ function createGPU(canvas, cloud) {
   gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.clearColor(0,0,0,0);
   // Number of trail segments drawn during the rain beat. Each extra pass
   // re-draws the cloud a little higher and dimmer to form a light streak.
-  const STREAKS=11;
+  const STREAKS=8;
   return {
     draw(view, sn, cs, t, pulseValue, introValue, st) {
       gl.viewport(0,0,canvas.width,canvas.height); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -503,22 +512,25 @@ function makeFallback(cloud) {
         const h3=fract(Math.sin(p.phase*45.164)*12543.123);
         const h4=fract(Math.sin(p.phase*34.771)*6217.317);
         const h5=fract(Math.sin(p.phase*57.913)*3719.541);
-        const delay=h1*0.72;
+        const h6=fract(Math.sin(p.phase*71.239)*9341.773);
+        const delay=h1*0.85;
         const lp=Math.min(1,Math.max(0,(rainValue-delay)/(1-delay)));
-        let fall=Math.min(1,Math.max(0,lp*(0.55+h5*0.9)));
+        let fall=Math.min(1,Math.max(0,lp*(0.42+h5*1.25)));
         fall=fall*fall*(3-2*fall);
-        const startY=-0.58-h4*0.40;
-        const cloudY=0.20+h3*0.58;
-        let curtain;
-        if (h4 < 0.72) {
-          const k=Math.floor(h5*9.0);
-          const center=-1.20+k*0.30;
-          curtain=center+(h2-0.5)*0.13+(h1-0.5)*0.05;
+        const startY=-0.62-h6*0.62;
+        const cloudY=0.04+h3*0.86;
+        let lane;
+        if (h4 < 0.74) {
+          const k=Math.floor(h5*8.0);
+          const center=-1.15+k*0.33;
+          lane=center+(h2-0.5)*0.30+(h1-0.5)*0.14;
         } else {
-          curtain=(h2-0.5)*2.6;
+          lane=(h2-0.5)*2.7;
         }
-        const sway=0.05*Math.sin(t*0.8+p.phase*5.0+h4*6.2831)*(1-fall*0.5);
-        let px=curtain+sway, py=startY+(cloudY-startY)*fall;
+        const slope=(h6-0.5)*1.25+0.12;
+        const drift=slope*fall*0.62;
+        const sway=0.035*Math.sin(t*0.8+p.phase*5.0+h4*6.2831)*(1-fall*0.5);
+        let px=lane+drift+sway, py=startY+(cloudY-startY)*fall;
         const hp=heartJS(p.phase);
         const hx=hp.x*0.40, hy=0.42-hp.y*0.30;
         const hm=smooth(heartValue);
@@ -541,22 +553,28 @@ function makeFallback(cloud) {
       const crown=p.kind===0?Math.max(0,1-p.y/.7):0;
       const r=Math.max(1.1,p.s*view.s*(1.95+crown*.90)*(1+gatherValue*0.3));
       a*=1+crown*.66;
-      // Rain streaks: repeat the sprite upward with fading alpha to draw a
-      // vertical light trail, matching the GPU multi-pass look.
+      // Rain streaks: a fraction of grains stay visible and distinct, each
+      // drawn as a short faint slanted-ish trail (short + few segments so the
+      // additive blend keeps individual points crisp instead of one white mass).
       const raining=rainValue<0.999&&heartValue<0.02;
-      if (raining) {
-        const ht=fract(Math.sin(p.phase*45.164)*12543.123);
-        const trailPx=(0.045+ht*0.11)*view.s;
-        const SEGS=11;
-        for (let s=SEGS-1;s>=0;s--) {
-          const f=s/(SEGS-1);
-          const sy=view.y+y*view.s-f*trailPx;
-          c.globalAlpha=Math.min(.98,a*1.18*(1-f*0.94));
-          c.drawImage(p.sprite,view.x+x*view.s-r,sy-r,r*2,r*2);
+      const keep=fract(Math.sin(p.phase*53.117)*7411.97);
+      const show=raining?(keep>=0.55?1:0):1;
+      if (show>0) {
+        if (raining) {
+          const ht=fract(Math.sin(p.phase*45.164)*12543.123);
+          const trailPx=(0.022+ht*0.058)*view.s;
+          const SEGS=8;
+          const sr=r*0.58;
+          for (let s=SEGS-1;s>=0;s--) {
+            const f=s/(SEGS-1);
+            const sy=view.y+y*view.s-f*trailPx;
+            c.globalAlpha=Math.min(.98,a*1.05*(1-f*0.97));
+            c.drawImage(p.sprite,view.x+x*view.s-sr,sy-sr,sr*2,sr*2);
+          }
+        } else {
+          c.globalAlpha=Math.min(.98,a*1.18);
+          c.drawImage(p.sprite,view.x+x*view.s-r,view.y+y*view.s-r,r*2,r*2);
         }
-      } else {
-        c.globalAlpha=Math.min(.98,a*1.18);
-        c.drawImage(p.sprite,view.x+x*view.s-r,view.y+y*view.s-r,r*2,r*2);
       }
     }
     c.globalAlpha=1; c.globalCompositeOperation='source-over';
