@@ -184,11 +184,14 @@ const tree=createTree(el('tree'),{onSelect:showPhoto});
     entered=true;
     window.removeEventListener('keydown',onKey,true);
     skyStop();
-    if(reducedMotion){intro.hidden=true;tree.setGather(false);tree.pulse(.6);return}
+    // Kick off the rain-drop entrance: particles fall from the top of the
+    // screen, pile up at the bottom, then spiral into the tree after ~3s.
+    tree.playRainEntrance();
+    if(reducedMotion){intro.hidden=true;return}
     intro.classList.add('leaving');
-    tree.setGather(false);
-    tree.pulse(1);
-    setTimeout(()=>{intro.hidden=true;try{el('tree').focus({preventScroll:true})}catch{}},980);
+    // Hide the cover quickly so the falling rain is visible; the animation
+    // itself keeps running for ~5s after the cover is gone.
+    setTimeout(()=>{intro.hidden=true;try{el('tree').focus({preventScroll:true})}catch{}},620);
   }
   function advance(){ if(index<slides.length-1)show(index+1); else enter(); }
 

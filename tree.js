@@ -185,6 +185,8 @@ uniform float uPulse;
 uniform float uIntro;
 uniform float uGather;
 uniform float uScatter;
+uniform float uRain;   // entrance: 0..1 falling from the top of the screen
+uniform float uMorph;  // entrance: 0..1 pile-of-light spirals into the tree
 varying vec3 vColor;
 varying float vBrightness;
 // Deterministic pseudo-random direction from a particle's phase, so the
@@ -259,6 +261,32 @@ void main() {
     shimmer = mix(shimmer, 0.55 + 0.75*pow(0.5+0.5*sin(uTime*1.6+aPhase*3.0),2.0), uScatter);
     brightness *= 1.0 + uScatter*0.35;
   }
+  // Entrance show. While uRain<1 the particle falls from above the screen as
+  // a raindrop, then piles up along the ground. Once uMorph>0 the whole pile
+  // spins (a sine pulse, so the spin is zero at both ends) and screwdrives
+  // into its final tree position. At uRain=uMorph=1 nothing changes, so the
+  // show settles seamlessly into the ordinary tree.
+  if (uRain < 0.999 || uMorph < 0.999) {
+    float h1=fract(sin(aPhase*12.9898)*43758.5453);
+    float h2=fract(sin(aPhase*78.233)*24634.6345);
+    float h3=fract(sin(aPhase*45.164)*12543.123);
+    // Slightly different start delays make a staggered curtain of rain rather
+    // than one solid sheet; each drop accelerates under gravity.
+    float delay=h1*0.40;
+    float lp=clamp((uRain-delay)/(1.0-delay),0.0,1.0);
+    float fall=lp*lp;
+    float startY=-0.46-h2*0.30;                 // above the top of the screen
+    float pileY=1.02+h3*0.085;                  // along the bottom of the screen
+    vec2 pile=vec2(x+(h2-0.5)*0.04, mix(startY,pileY,fall));
+    float m=uMorph*uMorph*(3.0-2.0*uMorph);
+    vec2 base=mix(pile,vec2(x,y),m);
+    float spin=sin(m*3.14159265)*6.2831853*(0.9+h1*0.5);
+    vec2 center=vec2(0.0,0.46);
+    vec2 rel=base-center;
+    vec2 spun=center+vec2(rel.x*cos(spin)-rel.y*sin(spin),rel.x*sin(spin)+rel.y*cos(spin));
+    x=spun.x; y=spun.y;
+    brightness *= 1.0 + (1.0-m)*0.45 + sin(m*3.14159265)*0.55;
+  }
   vec2 screen=(uOrigin+uScale*vec2(x,y))/uViewport;
   gl_Position=vec4(screen.x*2.0-1.0,1.0-screen.y*2.0,0.0,1.0);
   gl_PointSize=max(1.7*uRatio,aSize*uScale*uRatio*(2.65+2.9*crown)*(0.45+0.55*uIntro)*(1.0+uGather*0.3));
@@ -302,14 +330,15 @@ function createGPU(canvas, cloud) {
     const loc=gl.getAttribLocation(program,name);
     gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,components,gl.FLOAT,false,STRIDE*4,offset*4);
   }
-  const [viewport,origin,rotation,scale,ratio,time,pulse,intro,gather,scatter] = ['uViewport','uOrigin','uRotation','uScale','uRatio','uTime','uPulse','uIntro','uGather','uScatter'].map(n=>gl.getUniformLocation(program,n));
+  const [viewport,origin,rotation,scale,ratio,time,pulse,intro,gather,scatter,rain,morph] = ['uViewport','uOrigin','uRotation','uScale','uRatio','uTime','uPulse','uIntro','uGather','uScatter','uRain','uMorph'].map(n=>gl.getUniformLocation(program,n));
   gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE); gl.clearColor(0,0,0,0);
   return {
-    draw(view, sn, cs, t, pulseValue, introValue, gatherValue = 0, scatterValue = 0) {
+    draw(view, sn, cs, t, pulseValue, introValue, gatherValue = 0, scatterValue = 0, rainValue = 1, morphValue = 1) {
       gl.viewport(0,0,canvas.width,canvas.height); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2f(viewport,view.w,view.h); gl.uniform2f(origin,view.x,view.y);
       gl.uniform2f(rotation,sn,cs); gl.uniform1f(scale,view.s); gl.uniform1f(ratio,view.dpr);
       gl.uniform1f(time,t); gl.uniform1f(pulse,pulseValue); gl.uniform1f(intro,introValue); gl.uniform1f(gather,gatherValue); gl.uniform1f(scatter,scatterValue);
+      gl.uniform1f(rain,rainValue); gl.uniform1f(morph,morphValue);
       gl.drawArrays(gl.POINTS,0,cloud.length/STRIDE);
     },
     destroy() { gl.deleteBuffer(buffer); gl.deleteProgram(program); }
@@ -345,7 +374,8 @@ function makeFallback(cloud) {
     const r=Math.sqrt(Math.max(0,1-z*z));
     return {x:Math.cos(theta)*r*rad, y:z*rad};
   };
-  return (c,view,sn,cs,t,pulseValue=0,introValue=1,gatherValue=0,scatterValue=0)=>{
+  const fract=x=>x-Math.floor(x);
+  return (c,view,sn,cs,t,pulseValue=0,introValue=1,gatherValue=0,scatterValue=0,rainValue=1,morphValue=1)=>{
     c.globalCompositeOperation='lighter';
     for(const p of points) {
       let x=p.x*cs+p.z*sn;
@@ -379,6 +409,23 @@ function makeFallback(cloud) {
         const dx=dir.x*.92, dy=.42+dir.y*.66+drift;
         x=x+(dx-x)*scatterValue; y=y+(dy-y)*scatterValue;
         a*=1+scatterValue*.35;
+      }
+      if (rainValue < 0.999 || morphValue < 0.999) {
+        const h1=fract(Math.sin(p.phase*12.9898)*43758.5453);
+        const h2=fract(Math.sin(p.phase*78.233)*24634.6345);
+        const h3=fract(Math.sin(p.phase*45.164)*12543.123);
+        const delay=h1*0.40;
+        const lp=Math.min(1,Math.max(0,(rainValue-delay)/(1-delay)));
+        const fall=lp*lp;
+        const startY=-0.46-h2*0.30, pileY=1.02+h3*0.085;
+        const pileX=x+(h2-0.5)*0.04, pileYPos=startY+(pileY-startY)*fall;
+        const m=morphValue*morphValue*(3-2*morphValue);
+        const bx=pileX+(x-pileX)*m, by=pileYPos+(y-pileYPos)*m;
+        const spin=Math.sin(m*Math.PI)*Math.PI*2*(0.9+h1*0.5);
+        const rx=bx-0, ry=by-0.46;
+        x=rx*Math.cos(spin)-ry*Math.sin(spin);
+        y=0.46+rx*Math.sin(spin)+ry*Math.cos(spin);
+        a*=1+(1-m)*0.45+Math.sin(m*Math.PI)*0.55;
       }
       const crown=p.kind===0?Math.max(0,1-p.y/.7):0;
       const r=Math.max(1.1,p.s*view.s*(1.95+crown*.90)*(1+gatherValue*0.3));
@@ -498,6 +545,12 @@ export function createTree(canvas,{onSelect}={}) {
   let pulseValue=0, startedAt=0, parallax=0, parallaxTarget=0;
   let gatherValue=0, gatherTarget=0;
   let scatterValue=0, scatterTarget=0, scatterDirs=[];
+  // Rain-drop entrance show, driven by an absolute start time so it survives
+  // frame-rate changes. rainValue 0..1 falls from the top, morphValue 0..1
+  // spirals the pile into the tree. Before playRainEntrance() they sit at 1
+  // (no show), which is also the settled state after the show finishes.
+  let entranceStart=null, rainValue=1, morphValue=1, ornamentFade=1;
+  const RAIN_MS=1600, HOLD_MS=1400, MORPH_MS=1900;
   const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)');
   function resize() {
     const {width:w,height:h}=canvas.getBoundingClientRect();
@@ -578,6 +631,21 @@ export function createTree(canvas,{onSelect}={}) {
     const intro = reducedMotion?.matches ? 1 : Math.min(1, (now - startedAt) / 1400);
     const easedIntro = 1 - Math.pow(1 - intro, 3);
     pulseValue *= Math.exp(-2.6 * dt);
+    // Entrance timeline: rain 0..1 over RAIN_MS, a short hold, then the whole
+    // pile screws into the tree over MORPH_MS. Ornaments fade in only once the
+    // tree has essentially formed. Reduced motion skips straight to settled.
+    if (entranceStart !== null) {
+      const e = now - entranceStart;
+      if (reducedMotion?.matches || e >= RAIN_MS + HOLD_MS + MORPH_MS) {
+        rainValue = 1; morphValue = 1; ornamentFade = 1; entranceStart = null;
+      } else {
+        rainValue = Math.min(1, e / RAIN_MS);
+        morphValue = e <= RAIN_MS + HOLD_MS ? 0 : (e - RAIN_MS - HOLD_MS) / MORPH_MS;
+        const form = (e - RAIN_MS - HOLD_MS) / MORPH_MS;
+        ornamentFade = form <= 0.45 ? 0 : Math.min(1, (form - 0.45) / 0.5);
+        if (e > RAIN_MS && e < RAIN_MS + HOLD_MS + MORPH_MS && pulseValue < 0.12) pulseValue = 0.12;
+      }
+    }
     // Gathering is deliberately slow (about 2-3 s to a full ball) so a
     // brief fist that only closes a photo does not collapse the tree;
     // expanding back is quicker. Reduced motion snaps instead of easing.
@@ -602,19 +670,30 @@ export function createTree(canvas,{onSelect}={}) {
     ctx.setTransform(view.dpr,0,0,view.dpr,0,0);
     ctx.clearRect(0,0,view.w,view.h);
     const shiftedView = {...view, x: originX};
-    if(gpu) gpu.draw(shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue);
-    else fallback(ctx,shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue);
+    if(gpu) gpu.draw(shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue,rainValue,morphValue);
+    else fallback(ctx,shiftedView,sn,cs,animationTime,pulseValue,easedIntro,gatherValue,scatterValue,rainValue,morphValue);
     const glowSize=view.s*(.236+.004*Math.sin(animationTime*1.8))*(1+pulseValue*.35);
-    ctx.globalAlpha=1-scatterValue*.85;
+    ctx.globalAlpha=(1-scatterValue*.85)*ornamentFade;
     ctx.drawImage(heartGlow,originX-glowSize*.5,view.y-view.s*.06-glowSize*.5,glowSize,glowSize);
     const groundW=view.s*1.06, groundH=view.s*.20;
     ctx.drawImage(groundGlow,originX-groundW*.5,view.y+view.s*1.01-groundH*.5,groundW,groundH);
     ctx.globalAlpha=1;
-    drawGifts(ctx,{...view,x:originX},sn,Math.max(gatherValue,scatterValue));
-    drawPhotos(sn,cs,originX,gatherValue,scatterValue);
+    drawGifts(ctx,{...view,x:originX},sn,Math.max(gatherValue,scatterValue,1-ornamentFade));
+    drawPhotos(sn,cs,originX,Math.max(gatherValue,1-ornamentFade),scatterValue);
   }
 
   function pulse(strength=1) { pulseValue = Math.max(pulseValue, Math.min(1, strength)); }
+
+  // Start the rain-drop entrance show: particles fall from the top, pile up
+  // at the bottom, then spiral into the tree after a short hold. Any prior
+  // gather/scatter state is cleared so the show runs from a clean tree shape.
+  function playRainEntrance() {
+    if (!startedAt) startedAt = performance.now();
+    gatherTarget = 0; scatterTarget = 0;
+    gatherValue = 0; scatterValue = 0;
+    rainValue = 0; morphValue = 0; ornamentFade = 0;
+    entranceStart = performance.now();
+  }
 
   function setGather(on) { gatherTarget = on ? 1 : 0; if (on) scatterTarget = 0; }
 
@@ -667,7 +746,7 @@ export function createTree(canvas,{onSelect}={}) {
   canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);
   canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);
   const observer=new ResizeObserver(resize);observer.observe(canvas);resize();frame=requestAnimationFrame(draw);
-  return {setPhotos,rotate,pulse,setGather,setScatter,destroy() {
+  return {setPhotos,rotate,pulse,setGather,setScatter,playRainEntrance,destroy() {
     stopped=true;cancelAnimationFrame(frame);observer.disconnect();gpu?.destroy();stage.remove();
     canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);
     canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);
