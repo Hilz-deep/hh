@@ -137,6 +137,34 @@ function makeCloud() {
       add(Math.cos(a)*r, cy+Math.sin(a)*r*.9, 0, .0014+random()**2*.003,[1,.9,.72],.9,2);
     }
   }
+  // Festive fairy lights: multicoloured baubles strung over the branches.
+  // Each bulb carries its own phase, so the vertex shader blinks them out of
+  // sync like the string lights of a classic Python turtle Christmas tree.
+  const festive = [[1,.28,.34],[1,.78,.26],[.34,1,.55],[1,.45,.72],[.42,.78,1]];
+  for (let i=0; i<1200; i++) {
+    const y = .02 + Math.pow(random(), .72) * .94;
+    const a = random() * TAU;
+    const r = radiusAt(y) * (1.05 + spread()*.04);
+    add(Math.cos(a)*r, y, Math.sin(a)*r, .0038+random()*.0032,
+      festive[i % festive.length], .95+random()*.05, 8);
+  }
+  // A large golden star crowns the tip of the tree.
+  {
+    const cy=1.085, outer=.062, inner=.026, star=[];
+    for (let k=0;k<10;k++){
+      const ang=-Math.PI/2 + k*Math.PI/5, rad=k%2===0?outer:inner;
+      star.push([Math.cos(ang)*rad, cy+Math.sin(ang)*rad]);
+    }
+    for (let i=0;i<700;i++){
+      const seg=i%10, p0=star[seg], p1=star[(seg+1)%10], f=random();
+      add(p0[0]+(p1[0]-p0[0])*f+spread()*.0016, p0[1]+(p1[1]-p0[1])*f+spread()*.0016, 0,
+        .0018+random()**2*.0034,[1,.80+random()*.16,.40+random()*.14],.85+random()*.15,1);
+    }
+    for (let i=0;i<240;i++){
+      const a=random()*TAU, r=Math.sqrt(random())*.022;
+      add(Math.cos(a)*r, cy+Math.sin(a)*r*.9, 0, .0016+random()**2*.0034,[1,.92,.74],.95,1);
+    }
+  }
   return new Float32Array(points);
 }
 
@@ -171,7 +199,14 @@ void main() {
   shimmer += 0.30*pow(0.5+0.5*sin(uTime*2.1+aPhase*5.0),3.0)*step(0.72,aBrightness);
   float brightness = aBrightness * (0.25+0.75*uIntro) * (1.0+uPulse*0.9);
   float crown = aKind<0.5 ? 1.0-smoothstep(0.12,0.58,p.y) : 0.0;
-  if (aKind < 0.5) {
+  if (aKind > 7.5) {
+    // Fairy lights: each bulb blinks on its own phase string, so the tree
+    // twinkles in alternating colours rather than as one uniform pulse.
+    float blink = 0.5+0.5*sin(uTime*3.1+aPhase*4.0);
+    shimmer = 0.55 + 1.10*pow(blink,2.0);
+    x += 0.0011*sin(0.9*uTime+aPhase*3.0);
+    y += 0.0011*cos(0.7*uTime+aPhase*2.0);
+  } else if (aKind < 0.5) {
     x += 0.0013*sin(1.15*uTime+aPhase*4.0);
     y += 0.0018*cos(0.81*uTime+aPhase*2.0);
     brightness *= 0.65 + 0.42*clamp(0.5+z/max(0.015,p.y*0.59),0.0,1.0);
@@ -259,11 +294,13 @@ function createGPU(canvas, cloud) {
 
 // Reduced point count with prepainted radial sprites keeps the same shape on devices without WebGL.
 function makeFallback(cloud) {
-  const sprites = Array.from({length:16},(_,i)=>{
+  const festiveRGB=[[1,.28,.34],[1,.78,.26],[.34,1,.55],[1,.45,.72],[.42,.78,1]];
+  const sprites = Array.from({length:21},(_,i)=>{
     const canvas=document.createElement('canvas'); canvas.width=canvas.height=16;
     const c=canvas.getContext('2d');
     const t=i/12;
-    const rgb=i>=13 ? [255,153+(i-13)*37,206+(i-13)*19] : [Math.floor(71+184*t),Math.floor(131+124*t),255];
+    const rgb=i>=16 ? festiveRGB[i-16].map(v=>Math.round(v*255))
+      : i>=13 ? [255,153+(i-13)*37,206+(i-13)*19] : [Math.floor(71+184*t),Math.floor(131+124*t),255];
     const gradient=c.createRadialGradient(8,8,0,8,8,8);
     for(const [at,alpha] of [[0,1],[.3,.74],[.65,.18],[1,0]]) gradient.addColorStop(at,'rgba('+rgb.join(',')+','+alpha+')');
     c.fillStyle=gradient;c.fillRect(0,0,16,16);
@@ -272,8 +309,10 @@ function makeFallback(cloud) {
   const points=[];
   for (let i=0;i<cloud.length;i+=STRIDE) {
     const kind=cloud[i+9];
-    if (i/STRIDE%(kind===3?2:kind===2?3:kind>=4?4:7)!==0) continue;
-    const shade=kind===2?13+Math.floor(cloud[i+8]*.435):Math.min(12,Math.max(0,Math.round((cloud[i+4]-.26)/.74*12)));
+    if (i/STRIDE%(kind===8?2:kind===3?2:kind===2?3:kind>=4?4:7)!==0) continue;
+    const festiveIndex=()=>{let best=0,d=Infinity;for(let k=0;k<5;k++){const c=festiveRGB[k],diff=(cloud[i+4]-c[0])**2+(cloud[i+5]-c[1])**2+(cloud[i+6]-c[2])**2;if(diff<d){d=diff;best=k}}return best};
+    const shade=kind===8?16+festiveIndex()
+      : kind===2?13+Math.floor(cloud[i+8]*.435):Math.min(12,Math.max(0,Math.round((cloud[i+4]-.26)/.74*12)));
     points.push({x:cloud[i],y:cloud[i+1],z:cloud[i+2],s:cloud[i+3],b:cloud[i+7],phase:cloud[i+8],kind,sprite:sprites[shade]});
   }
   return (c,view,sn,cs,t,pulseValue=0,introValue=1,gatherValue=0)=>{
@@ -283,7 +322,10 @@ function makeFallback(cloud) {
       const z=p.z*cs-p.x*sn;
       let y=p.y+z*.157, a=p.b*(.72+.28*Math.sin(t*.94+p.phase*2))*(0.25+0.75*introValue)*(1+pulseValue*0.9);
       y += (1-introValue)*0.22*(0.5+0.5*Math.sin(p.phase*3));
-      if(p.kind>=4){
+      if(p.kind===8){
+        const blink=0.5+0.5*Math.sin(t*3.1+p.phase*4.0);
+        a*=0.55+1.10*Math.pow(blink,2.0);
+      } else if(p.kind>=4){
         const ph=(p.kind%2===0?.071:-.057)*(1+(p.kind-4)*.25)*t;
         const cc=Math.cos(ph),ss=Math.sin(ph);
         y=p.y+(z*cc-x*ss)*.157;x=x*cc+z*ss;
@@ -349,6 +391,50 @@ function makeGroundGlow() {
   c.fillStyle=glow; c.fillRect(0,0,256,256);
   c.restore();
   return sprite;
+}
+
+// Gift boxes at the foot of the tree, drawn on the foreground canvas like
+// the Python turtle version: coloured parcels with a ribbon cross and bow.
+const GIFTS=[
+  {x:-.154,y:.008,s:1.00,body:'#7d4b8c',ribbon:'#f2d489'},
+  {x:-.062,y:.030,s:.74,body:'#3f6f8c',ribbon:'#f5efe0'},
+  {x: .040,y:.014,s:.88,body:'#a8534e',ribbon:'#f6d9a0'},
+  {x: .142,y:.036,s:.66,body:'#4f7d63',ribbon:'#f3e6c0'},
+  {x: .098,y:-.006,s:.55,body:'#8c6a3f',ribbon:'#f7e9c8'}
+];
+function drawGifts(c,view,sn,gather){
+  const alpha=Math.max(0,1-gather*1.35);
+  if(alpha<=0.02)return;
+  c.save();
+  c.globalAlpha=alpha;
+  for(const g of GIFTS){
+    const w=view.s*.072*g.s, h=w*.82;
+    const x=view.x+g.x*view.s+sn*g.y*view.s*.16;
+    const y=view.y+view.s*1.028-h*.5+g.y*view.s*.10;
+    c.translate(x,y);
+    // soft contact shadow
+    c.fillStyle='rgba(3,6,14,.45)';
+    c.beginPath();c.ellipse(0,h*.62,w*.72,h*.20,0,0,Math.PI*2);c.fill();
+    // box body with a slightly lighter top face for depth
+    c.fillStyle=g.body;
+    c.fillRect(-w*.5,-h*.5,w,h);
+    c.fillStyle='rgba(255,255,255,.10)';
+    c.fillRect(-w*.5,-h*.5,w,h*.22);
+    c.fillStyle='rgba(0,0,0,.16)';
+    c.fillRect(-w*.5,h*.22,w,h*.28);
+    // ribbon cross
+    c.fillStyle=g.ribbon;
+    c.fillRect(-w*.075,-h*.5,w*.15,h);
+    c.fillRect(-w*.5,-h*.095,w,h*.19);
+    // bow
+    c.beginPath();
+    c.ellipse(-w*.13,-h*.5-h*.11,w*.14,h*.12,-.5,0,Math.PI*2);
+    c.ellipse( w*.13,-h*.5-h*.11,w*.14,h*.12, .5,0,Math.PI*2);
+    c.fill();
+    c.beginPath();c.arc(0,-h*.5-h*.10,w*.055,0,Math.PI*2);c.fill();
+    c.setTransform(view.dpr,0,0,view.dpr,0,0);
+  }
+  c.restore();
 }
 
 const PHOTO_HEIGHTS=[.43,.69,.33,.81,.57,.24,.74,.89];
@@ -459,6 +545,7 @@ export function createTree(canvas,{onSelect}={}) {
     ctx.drawImage(heartGlow,originX-glowSize*.5,view.y-view.s*.06-glowSize*.5,glowSize,glowSize);
     const groundW=view.s*1.06, groundH=view.s*.20;
     ctx.drawImage(groundGlow,originX-groundW*.5,view.y+view.s*1.01-groundH*.5,groundW,groundH);
+    drawGifts(ctx,{...view,x:originX},sn,gatherValue);
     drawPhotos(sn,cs,originX,gatherValue);
   }
 
