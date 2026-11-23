@@ -217,6 +217,12 @@ vec2 heartPoint(float phase, out float rim){
 }
 void main() {
   vec3 p=aPosition;
+  // One continuous 0..1 value drives EVERY "rain beat" visual (silver colour,
+  // small points, light trail, sparse mask). It stays 0 in the settled tree so
+  // colours stay normal, and is eased 1->0 by uHeart inside the entrance block
+  // below. Replacing the old step() switches removes the visible jerk when the
+  // falling grains condensed into the heart.
+  float rainMix=0.0;
   float s=uRotation.x, c=uRotation.y;
   float x = p.x*c + p.z*s;
   float z = p.z*c - p.x*s;
@@ -286,6 +292,10 @@ void main() {
   // At the settled state (uRain=1,uHeart=0,uCluster=0,uGrow=1) nothing moves.
   float heartRim=0.0;
   if (uRain < 0.999 || uHeart > 0.001 || uCluster > 0.001 || uGrow < 0.999) {
+    // Ease the whole rain look out across the first part of the heart-in beat
+    // instead of flipping it off at a single threshold: this is what removes
+    // the "pop" as scattered grains condense into the heart.
+    rainMix = 1.0 - smoothstep(0.0, 0.45, uHeart);
     float h1=fract(sin(aPhase*12.9898)*43758.5453);
     float h2=fract(sin(aPhase*78.233)*24634.6345);
     float h3=fract(sin(aPhase*45.164)*12543.123);
@@ -320,7 +330,7 @@ void main() {
     float sway=0.035*sin(uTime*0.8+aPhase*5.0+h4*6.2831)*(1.0-fall*0.5);
     vec2 cloud=vec2(lane+drift+sway, mix(startY,cloudY,fall));
     // Short, faint trail so grains read as discrete points, not smeared blobs.
-    float trailLen=(0.022+h3*0.058)*step(0.001,uRain)*step(uRain,0.999);
+    float trailLen=(0.022+h3*0.058)*rainMix;
     cloud.y += uStreak*trailLen;
     brightness *= mix(1.0, 0.02, uStreak);
 
@@ -356,17 +366,18 @@ void main() {
   gl_Position=vec4(screen.x*2.0-1.0,1.0-screen.y*2.0,0.0,1.0);
   // During the rain beat the streaks read as cool white / silver starlight,
   // with only a minority keeping a pink-violet tint (see reference image).
-  float rainBeat=step(uHeart,0.02)*(1.0-step(0.999,uRain));
   // Keep only part of the grains during the rain so they stay distinct; fade
-  // the hidden ones back in as the heart condenses (full tree needs them all).
+  // the hidden ones back in as the heart condenses. uGrow is a second gate:
+  // once growth starts (and in the settled tree) ALL particles must show, so
+  // finishing the show never drops 55% of them in a single frame.
   float keep=fract(sin(aPhase*53.117)*7411.97);
-  float show=mix(step(0.55,keep),1.0,smoothstep(0.0,0.35,uHeart));
+  float show=mix(step(0.55,keep),1.0,max(smoothstep(0.0,0.45,uHeart),uGrow));
   // Shrink points during the rain so individual grains never fuse into blobs.
-  float rainSize=mix(1.0,0.58,rainBeat);
+  float rainSize=mix(1.0,0.58,rainMix);
   gl_PointSize=max(1.2*uRatio,aSize*uScale*uRatio*(2.65+2.9*crown)*(0.45+0.55*uIntro)*(1.0+uGather*0.3)*rainSize);
   float rarePink=step(0.88,fract(sin(aPhase*63.71)*2749.13));
   vec3 rainColor=mix(vec3(0.90,0.94,1.0),vec3(1.0,0.62,0.84),rarePink*0.7);
-  vColor=mix(mix(aColor,vec3(1.0,.88,.96),crown*0.34),rainColor,rainBeat);
+  vColor=mix(mix(aColor,vec3(1.0,.88,.96),crown*0.34),rainColor,rainMix);
   vBrightness=brightness*shimmer*(1.0+0.42*crown)*show;
 }`;
 const fragmentSource = `
@@ -418,8 +429,12 @@ function createGPU(canvas, cloud) {
       gl.uniform2f(rotation,sn,cs); gl.uniform1f(scale,view.s); gl.uniform1f(ratio,view.dpr);
       gl.uniform1f(time,t); gl.uniform1f(pulse,pulseValue); gl.uniform1f(intro,introValue); gl.uniform1f(gather,st.gather); gl.uniform1f(scatter,st.scatter);
       gl.uniform1f(rain,st.rain); gl.uniform1f(heart,st.heart); gl.uniform1f(cluster,st.cluster); gl.uniform1f(grow,st.grow);
-      // Only streak during the rain beat (before the heart condenses).
-      const raining = st.rain < 0.999 && st.heart < 0.02;
+      // Draw the multi-pass trail for the whole rain->heart window. The trail
+      // LENGTH (rainMix) fades to zero smoothly as the heart forms, so by the
+      // time we switch back to a single pass the extra segments are already
+      // stacked on the same point — no visible pop. Gate on heart/grow instead
+      // of rain so the rain=1 boundary no longer flips the pass count mid-fade.
+      const raining = st.heart < 0.45 && st.grow < 0.15;
       const passes = raining ? STREAKS : 1;
       for (let i=0;i<passes;i++) {
         gl.uniform1f(streak, raining ? i/(STREAKS-1) : 0);
@@ -554,17 +569,21 @@ function makeFallback(cloud) {
       const r=Math.max(1.1,p.s*view.s*(1.95+crown*.90)*(1+gatherValue*0.3));
       a*=1+crown*.66;
       // Rain streaks: a fraction of grains stay visible and distinct, each
-      // drawn as a short faint slanted-ish trail (short + few segments so the
-      // additive blend keeps individual points crisp instead of one white mass).
-      const raining=rainValue<0.999&&heartValue<0.02;
+      // drawn as a short faint trail. All rain visuals ease out with rainMix
+      // as the heart forms, so nothing hard-switches at a stage boundary.
+      const rainMix = 1-smooth(Math.min(1,heartValue/0.45));
+      const raining = heartValue<0.45&&growValue<0.15;
       const keep=fract(Math.sin(p.phase*53.117)*7411.97);
-      const show=raining?(keep>=0.55?1:0):1;
+      // Same semantics as the GPU path: kept grains always show, the rest fade
+      // in smoothly as the heart condenses, and all show once growth begins.
+      const reveal=Math.max(smooth(Math.min(1,heartValue/0.45)),growValue);
+      const show=keep>=0.55?1:reveal;
       if (show>0) {
         if (raining) {
           const ht=fract(Math.sin(p.phase*45.164)*12543.123);
-          const trailPx=(0.022+ht*0.058)*view.s;
+          const trailPx=(0.022+ht*0.058)*view.s*rainMix;
           const SEGS=8;
-          const sr=r*0.58;
+          const sr=r*(1-0.42*rainMix);
           for (let s=SEGS-1;s>=0;s--) {
             const f=s/(SEGS-1);
             const sy=view.y+y*view.s-f*trailPx;
@@ -803,7 +822,7 @@ export function createTree(canvas,{onSelect}={}) {
   // lingers, a collapse to the tip, then a top-down bloom into the tree.
   // Optional ?slow=4 query parameter stretches the whole show for inspection.
   const slowFactor=(()=>{try{const v=parseFloat(new URLSearchParams(location.search).get('slow'));return v>=1&&v<=20?v:1}catch{return 1}})();
-  const RAIN_MS=5000*slowFactor, HEART_IN_MS=1800*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=900*slowFactor, GROW_MS=4500*slowFactor;
+  const RAIN_MS=5000*slowFactor, HEART_IN_MS=2600*slowFactor, HEART_HOLD_MS=1600*slowFactor, CLUSTER_MS=1100*slowFactor, GROW_MS=4500*slowFactor;
   const ENTRANCE_MS=RAIN_MS+HEART_IN_MS+HEART_HOLD_MS+CLUSTER_MS+GROW_MS;
   const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)');
   function resize() {
